@@ -26,4 +26,4 @@ The spreadsheet should not include anything other than 6 columns - do not includ
 
 The current database schema may be accessed here: https://plandb.sioslab.com/docs/plandbschema/index.html 	
 
-Email your template and data set to ds264@cornell.edu
+To begin your database input, save a copy of the Database Input Tempalte.csv file and fill it out.  Then, go to: https://github.com/roman-corgi/corgidb/issues, click on 'New Issue', select 'Database input', and then fill out the issue template and submit. 
