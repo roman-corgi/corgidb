@@ -1,4 +1,4 @@
-MY_COLNAME,DB_COLNAME,NEW_KEY,DESCRIPTION,UNITS,TABLE
+MY_COLNAME,DB_COLNAME,UNITS,NEW_KEY,DESCRIPTION,TABLE
 MAIN_ID,st_name,,,,
 RA,rastr,,,,
 DEC,decstr,,,,
@@ -6,4 +6,4 @@ PMRA,sy_pmra,,,,
 PMDEC,sy_pmdec,,,,
 PLX_VALUE,sy_plx,,,,
 RVZ_RADVEL,st_radv,,,,
-COO_QUAL,qual,TRUE,Coordinate quality,,Stars
+COO_QUAL,qual,,TRUE,Coordinate quality,Stars
