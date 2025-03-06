@@ -27,3 +27,7 @@ The spreadsheet should not include anything other than 6 columns - do not includ
 The current database schema may be accessed here: https://plandb.sioslab.com/docs/plandbschema/index.html 	
 
 To begin your database input, save a copy of the Database Input Tempalte.csv file and fill it out.  Then, go to: https://github.com/roman-corgi/corgidb/issues, click on 'New Issue', select 'Database input', and then fill out the issue template and submit. 
+
+Database Snapshots
+==============================
+To simplify use, we will host snapshots of the databasde in Python pickle files that can be downloaded and directly manipulated. One snapshot is currently on the order of 2 GB. The snapshots will be available here: https://drive.google.com/drive/u/1/folders/1ibN_jW0ToOteTbTqz0niV4Adh-aWj9rU
