@@ -22,7 +22,7 @@ To generate the map, use the Database Input Template.csv file. This file contain
 	* DESCRIPTION: Write a brief but complete description of the column, including the units (where applicable)
    	* TABLE: The name of the intended table in the database (case sensitive)
 
-The spreadsheet should not include anything other than 6 columns - do not include any notes or any other extraneous information. 
+The spreadsheet should not include anything other than 6 columns. If you wish to add comments, add them in their own separate rows (do not leave any whitespace rows between data and comments).  All comment rows must have # as the leading character.  Do **not** use # in any data fields. 
 
 The current database schema may be accessed here: https://plandb.sioslab.com/docs/plandbschema/index.html 	
 
