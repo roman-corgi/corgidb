@@ -1,1 +1,3 @@
 EXOSIMS>=3.4.1
+SQLAlchemy
+PyMySQL
