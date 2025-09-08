@@ -1,9 +1,11 @@
 import pandas
 import keyring
 import getpass
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, text, types
 import os
 import numpy as np
+import re
+import warnings
 
 
 def gen_engine(username, db="plandb", server="127.0.0.1"):
@@ -46,6 +48,8 @@ def gen_engine(username, db="plandb", server="127.0.0.1"):
 
     if newpass:
         keyring.set_password(f"plandb_{server}_login", username, passwd)
+
+    return engine
 
 
 def proc_col_req(fname, engine, comment="#"):
@@ -127,7 +131,7 @@ def proc_col_req(fname, engine, comment="#"):
         tmp = data.loc[data["TABLE"] == t]
         newkeys = tmp.loc[~tmp["DB_COLNAME"].isin(existing_keys[t])]
         assert newkeys["NEW_KEY"].all(), (
-            f"Some keys requested for table {t} do not exist in DB, "
+            f"Some keys requested for table {t} do not exist in DB, "  # noqa
             "but are not marked as new."
         )
 
@@ -138,7 +142,7 @@ def proc_col_req(fname, engine, comment="#"):
                 unit = row.UNITS
             comm = (
                 f"""ALTER TABLE {t} ADD COLUMN {row.DB_COLNAME} {unit} """
-                f"""COMMENT "{row.DESCRIPTION}";"""
+                f"""COMMENT "{row.DESCRIPTION}";"""  # noqa
             )
 
             _ = connection.execute(text(comm))
@@ -158,6 +162,105 @@ def proc_col_req(fname, engine, comment="#"):
                 unit = row.UNITS
             txt.append(f'''{row.DB_COLNAME} {unit} COMMENT "{row.DESCRIPTION}"''')
 
-        comm = f"CREATE TABLE {t} ({', '.join(txt)});"
+        comm = f"CREATE TABLE {t} ({', '.join(txt)});"  # noqa
 
         _ = connection.execute(text(comm))
+
+
+def gen_SaturationCurves_table(data, schema, engine):
+    """Populate SaturationCurves table
+
+    Args:
+        data (pandas.DataFrame):
+            Table data
+        schema (pandas.DataFrame):
+            Table of column names ('Column') and comments ('Comments')
+        engine (sqlalchemy.engine.base.Engine):
+            Engine
+
+    Returns:
+        None
+
+    """
+    connection = engine.connect()
+    namemxchar = np.array([len(n) for n in data["scenario_name"].values]).max()
+
+    _ = data.to_sql(
+        "SaturationCurves",
+        connection,
+        chunksize=100,
+        if_exists="replace",
+        dtype={
+            "scenario_name": types.String(namemxchar),
+        },
+        index=False,
+    )
+
+    addSQLcomments(connection, 'SaturationCurves', schema)
+
+
+def addSQLcomments(connection, tablename, schema):
+    """Add comments to an existing table
+
+    Args:
+        connection (sqlalchemy.engine.base.Connection):
+            connection object
+        tablename (str):
+            Name of table
+        schema (pandas.DataFrame):
+            Table of column names ('Column') and comments ('Comments')
+
+    Returns:
+        None
+
+    """
+
+    # grab the original table definition
+    result = connection.execute(text(f"show create table {tablename}"))
+    res = result.fetchall()
+    res = res[0][1]
+    res = res.split("\n")
+
+    # define regex for parsing col defs
+    p = re.compile(r"`(\S+)`[\s\S]+")
+
+    # loop through and find all col definitions without comments
+    keys = []
+    defs = []
+    for r in res:
+        r = r.strip().strip(",")
+        if "COMMENT" in r:
+            continue
+        m = p.match(r)
+        if m:
+            keys.append(m.groups()[0])
+            defs.append(r)
+
+    # compare schema and table
+    missing_from_schema = list(set(keys) - set(schema["Column"].values))
+    if len(missing_from_schema) > 0:
+        warnings.warn(
+            (
+                "Columns present in table but missing from schema: "
+                f"{','.join(missing_from_schema)}"
+            )
+        )
+
+    missing_from_table = list(set(schema["Column"].values) - set(keys))
+    if len(missing_from_table) > 0:
+        schema = schema.loc[~schema["Column"].isin(missing_from_table)].reset_index(
+            drop=True
+        )
+        warnings.warn(
+            (
+                "Columns present in schema but missing from table (or already have "
+                f"comments): {','.join(missing_from_table)}"
+            )
+        )
+
+    for key, d in zip(keys, defs):
+        comm = (
+            f"ALTER TABLE `{tablename}` CHANGE `{key}` {d} COMMENT "
+            f'"{schema.loc[schema["Column"] == key, "Comments"].values[0]}";'  # noqa
+        )
+        r = connection.execute(text(comm))

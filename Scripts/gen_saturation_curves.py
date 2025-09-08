@@ -11,7 +11,13 @@ from synphot import units
 
 
 def gen_saturation_curves():
-    """Create a dataframe containing the data for the SaturationCurves table"""
+    """Create a dataframe containing the data for the SaturationCurves table
+
+    Returns:
+        pandas.DataFrame:
+            The final table
+
+    """
 
     # define units
     PHOTLAM_sr_decomposed_val = (1 * units.PHOTLAM / u.sr).to_value(
@@ -110,3 +116,5 @@ def gen_saturation_curves():
             "t_int_hr_99percent_V5": t_int_hr_99percent_V5,
         }
     )
+
+    return out
