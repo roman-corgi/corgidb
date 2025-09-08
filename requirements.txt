@@ -1,3 +1,7 @@
-EXOSIMS>=3.4.1
+EXOSIMS>=3.6.4
 SQLAlchemy
 PyMySQL
+pandas
+keyring
+getpass
+numpy
