@@ -1,7 +1,7 @@
-﻿Column,Comments
-scenario_name,Scenario Name
-r_lamD,Angular Separation (lambda/D)
-r_as,Angular Separation (arcsec)
-contrast,Saturation Contrast
-dMag,Saturation Delta Mag
-t_int_hr_99percent_V5,Integration Time (hours) for 99% of saturation Delta Mag for V=5 target at nominal local and exozodi values
+﻿Column,Comments,Index,ForeignKey
+scenario_name,Scenario Name,,Scenarios(scenario_name)
+r_lamD,Angular Separation (lambda/D),,
+r_as,Angular Separation (arcsec),,
+contrast,Saturation Contrast,,
+dMag,Saturation Delta Mag,,
+t_int_hr_99percent_V5,Integration Time (hours) for 99% of saturation Delta Mag for V=5 target at nominal local and exozodi values,,
