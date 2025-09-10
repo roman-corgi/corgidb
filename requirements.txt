@@ -3,5 +3,4 @@ SQLAlchemy
 PyMySQL
 pandas
 keyring
-getpass
 numpy
