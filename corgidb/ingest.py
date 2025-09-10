@@ -91,15 +91,24 @@ def proc_col_req(fname, engine, comment="#"):
         len(set(data.columns).symmetric_difference(expected_cols)) == 0
     ), f'Input data must contain the columns: {", ".join(expected_cols)} ONLY'
 
+    # fill in missing DB cols for new keys
+    data.loc[data["NEW_KEY"].isna(), "NEW_KEY"] = False
+    inds = (data["NEW_KEY"]) & (data["DB_COLNAME"].isna())
+    data.loc[inds, "DB_COLNAME"] = data.loc[inds, "MY_COLNAME"]
+
     # verify that all rows are complete
     assert not (
-        data[expected_cols[:3]].isna().values.any()
+        data[expected_cols[:2]].isna().values.any()
     ), "Input data is missing entries."
 
     # split UNITS col
     sqlu = []
     physu = []
     for val in data["UNITS"].values:
+        if pandas.isna(val):
+            sqlu.append(np.nan)
+            physu.append(np.nan)
+            continue
         if "," in val:
             tmp = val.split(",")
             sqlu.append(tmp[0].strip())

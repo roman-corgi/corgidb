@@ -1,9 +1,9 @@
-MY_COLNAME,DB_COLNAME,UNITS,NEW_KEY,DESCRIPTION,TABLE
-MAIN_ID,st_name,,,,
-RA,rastr,,,,
-DEC,decstr,,,,
-PMRA,sy_pmra,,,,
-PMDEC,sy_pmdec,,,,
-PLX_VALUE,sy_plx,,,,
-RVZ_RADVEL,st_radv,,,,
-COO_QUAL,qual,,TRUE,Coordinate quality,Stars
+MY_COLNAME,DB_COLNAME,TABLE,UNITS,NEW_KEY,DESCRIPTION,SQL_DATATYPE,INDEX,FOREIGNKEY
+MAIN_ID,st_name,Stars,,,,,,
+RA,rastr,Stars,,,,,,
+DEC,decstr,Stars,,,,,,
+PMRA,sy_pmra,Stars,,,,,,
+PMDEC,sy_pmdec,Stars,,,,,,
+PLX_VALUE,sy_plx,Stars,,,,,,
+RVZ_RADVEL,st_radv,Stars,,,,,,
+COO_QUAL,qual,Stars,,TRUE,Coordinate quality,TINYINT,,
