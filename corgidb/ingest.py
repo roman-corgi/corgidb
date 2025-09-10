@@ -167,6 +167,38 @@ def proc_col_req(fname, engine, comment="#"):
         _ = connection.execute(text(comm))
 
 
+def gen_Scenarios_table(data, schema, engine):
+    """Populate SaturationCurves table
+
+    Args:
+        data (pandas.DataFrame):
+            Table data
+        schema (pandas.DataFrame):
+            Table of column names ('Column') and comments ('Comments')
+        engine (sqlalchemy.engine.base.Engine):
+            Engine
+
+    Returns:
+        None
+
+    """
+    connection = engine.connect()
+    namemxchar = np.array([len(n) for n in data["scenario_name"].values]).max()
+
+    _ = data.to_sql(
+        "Scenarios",
+        connection,
+        chunksize=100,
+        if_exists="replace",
+        dtype={
+            "scenario_name": types.String(namemxchar),
+        },
+        index=False,
+    )
+
+    updateSQLschema(connection, "Scenarios", schema)
+
+
 def gen_SaturationCurves_table(data, schema, engine):
     """Populate SaturationCurves table
 
@@ -196,11 +228,11 @@ def gen_SaturationCurves_table(data, schema, engine):
         index=False,
     )
 
-    addSQLcomments(connection, 'SaturationCurves', schema)
+    updateSQLschema(connection, "SaturationCurves", schema)
 
 
-def addSQLcomments(connection, tablename, schema):
-    """Add comments to an existing table
+def updateSQLschema(connection, tablename, schema):
+    """Add comments to an existing table and set indexes and foreign keys
 
     Args:
         connection (sqlalchemy.engine.base.Connection):
@@ -214,6 +246,25 @@ def addSQLcomments(connection, tablename, schema):
         None
 
     """
+
+    # handle indexes
+    indexes = schema.loc[schema["Index"] == 1, "Column"].values
+    if len(indexes) > 0:
+        _ = connection.execute(
+            text(f"ALTER TABLE {tablename} ADD INDEX ({', '.join(indexes)})")
+        )
+
+    # handle foregin keys
+    foreignkeys = schema.loc[~schema["ForeignKey"].isna()]
+    if len(foreignkeys) > 0:
+        for _, row in foreignkeys.iterrows():
+            _ = connection.execute(
+                text(
+                    f"ALTER TABLE {tablename} ADD FOREIGN KEY ({row.Column}) "
+                    f"REFERENCES {row.ForeignKey} ON DELETE NO ACTION "
+                    "ON UPDATE NO ACTION"
+                )
+            )
 
     # grab the original table definition
     result = connection.execute(text(f"show create table {tablename}"))
@@ -263,4 +314,4 @@ def addSQLcomments(connection, tablename, schema):
             f"ALTER TABLE `{tablename}` CHANGE `{key}` {d} COMMENT "
             f'"{schema.loc[schema["Column"] == key, "Comments"].values[0]}";'  # noqa
         )
-        r = connection.execute(text(comm))
+        _ = connection.execute(text(comm))

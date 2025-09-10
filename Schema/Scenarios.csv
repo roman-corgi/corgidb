@@ -1,0 +1,10 @@
+﻿Column,Comments,Index,ForeignKey
+scenario_name,Scenario Name,1,
+minangsep_lamD,Minimum angular separation (lambda/D),,
+maxangsep_lamD,Maximum angular separation (lambda/D),,
+minangsep_as,Minimum angular separation (arcsec),,
+maxangsep_as,Maximum angular separation (arcsec),,
+lam,Central wavelength (nm),,
+bandpass,Bandpass (fraction),,
+delta_lam,Bandpass (nm),,
+lamD_as,lambda/D in arcseconds,,
