@@ -82,42 +82,40 @@ def proc_col_req(fname, engine, comment="#"):
     expected_cols = [
         "MY_COLNAME",
         "DB_COLNAME",
+        "TABLE",
         "UNITS",
         "NEW_KEY",
         "DESCRIPTION",
-        "TABLE",
+        "SQL_DATATYPE",
+        "INDEX",
+        "FOREIGNKEY",
     ]
+    reqcols = [
+        "MY_COLNAME",
+        "DB_COLNAME",
+        "TABLE",
+        "NEW_KEY",
+        "SQL_DATATYPE",
+        "INDEX",
+    ]
+
     assert (
         len(set(data.columns).symmetric_difference(expected_cols)) == 0
     ), f'Input data must contain the columns: {", ".join(expected_cols)} ONLY'
 
-    # fill in missing DB cols for new keys
-    data.loc[data["NEW_KEY"].isna(), "NEW_KEY"] = False
+    # fill in missing DB cols for boolean keys
+    for boolkey in ["NEW_KEY", "INDEX"]:
+        data.loc[data[boolkey].isna(), boolkey] = False
+
+    # new keys without db_colname entries should use my_colname
     inds = (data["NEW_KEY"]) & (data["DB_COLNAME"].isna())
     data.loc[inds, "DB_COLNAME"] = data.loc[inds, "MY_COLNAME"]
 
-    # verify that all rows are complete
-    assert not (
-        data[expected_cols[:2]].isna().values.any()
-    ), "Input data is missing entries."
+    # change any STRING datatypes to VARCHAR
+    data.loc[data["SQL_DATATYPE"] == "STRING", "SQL_DATATYPE"] = "TEXT"
 
-    # split UNITS col
-    sqlu = []
-    physu = []
-    for val in data["UNITS"].values:
-        if pandas.isna(val):
-            sqlu.append(np.nan)
-            physu.append(np.nan)
-            continue
-        if "," in val:
-            tmp = val.split(",")
-            sqlu.append(tmp[0].strip())
-            physu.append(tmp[1].strip())
-        else:
-            sqlu.append(val)
-            physu.append(None)
-    data["UNITS"] = sqlu
-    data["PHYSICALUNIT"] = physu
+    # verify that all rows are complete
+    assert not (data[reqcols].isna().values.any()), "Input data is missing entries."
 
     # find all requested tables
     req_tables = data["TABLE"].unique()
@@ -145,16 +143,26 @@ def proc_col_req(fname, engine, comment="#"):
         )
 
         for jj, row in newkeys.iterrows():
-            if row.UNITS == "STRING":
-                unit = "TEXT"
-            else:
-                unit = row.UNITS
             comm = (
-                f"""ALTER TABLE {t} ADD COLUMN {row.DB_COLNAME} {unit} """
+                f"""ALTER TABLE {t} ADD COLUMN {row.DB_COLNAME} {row.SQL_DATATYPE} """
                 f"""COMMENT "{row.DESCRIPTION}";"""  # noqa
             )
 
             _ = connection.execute(text(comm))
+
+        # add any requested indexes and foreignkeys
+        indexes = tmp.loc[tmp["INDEX"], "DB_COLNAME"].values
+        if len(indexes) > 0:
+            add_indexes(connection, t, indexes)
+
+        foreignkeys = tmp.loc[~tmp["FOREIGNKEY"].isna()]
+        if len(foreignkeys) > 0:
+            add_foreignkeys(
+                connection,
+                t,
+                foreignkeys["DB_COLNAME"].values,
+                foreignkeys["FOREIGNKEY"].values,
+            )
 
     # these are the new tables
     new_tables = list(set(req_tables) - set(existing_tables))
@@ -165,15 +173,26 @@ def proc_col_req(fname, engine, comment="#"):
         # generate create table text
         txt = []
         for jj, row in tmp.iterrows():
-            if row.UNITS == "STRING":
-                unit = "TEXT"
-            else:
-                unit = row.UNITS
-            txt.append(f'''{row.DB_COLNAME} {unit} COMMENT "{row.DESCRIPTION}"''')
+            txt.append(
+                f'''{row.DB_COLNAME} {row.SQL_DATATYPE} COMMENT "{row.DESCRIPTION}"'''
+            )
 
         comm = f"CREATE TABLE {t} ({', '.join(txt)});"  # noqa
 
         _ = connection.execute(text(comm))
+
+        indexes = tmp.loc[tmp["INDEX"], "DB_COLNAME"].values
+        if len(indexes) > 0:
+            add_indexes(connection, t, indexes)
+
+        foreignkeys = tmp.loc[~tmp["FOREIGNKEY"].isna()]
+        if len(foreignkeys) > 0:
+            add_foreignkeys(
+                connection,
+                t,
+                foreignkeys["DB_COLNAME"].values,
+                foreignkeys["FOREIGNKEY"].values,
+            )
 
 
 def gen_Scenarios_table(data, schema, engine):
@@ -240,6 +259,56 @@ def gen_SaturationCurves_table(data, schema, engine):
     updateSQLschema(connection, "SaturationCurves", schema)
 
 
+def add_indexes(connection, tablename, indexes):
+    """Add indexes to an existing table
+
+    Args:
+        connection (sqlalchemy.engine.base.Connection):
+            connection object
+        tablename (str):
+            Name of table
+        indexes (list):
+            List of columnnames to make into indexes
+
+    Returns:
+        None
+
+    """
+
+    _ = connection.execute(
+        text(f"ALTER TABLE {tablename} ADD INDEX ({', '.join(indexes)})")
+    )
+
+
+def add_foreignkeys(connection, tablename, cols, foreignkeys):
+    """Add foreign keys to table
+
+    Args:
+        connection (sqlalchemy.engine.base.Connection):
+            connection object
+        tablename (str):
+            Name of table
+        cols (list):
+            List of columnnames to add as foreignkeys
+        foreignkeys (list):
+            List of foreign key specifications of the form "Table(column)"
+
+    Returns:
+        None
+
+
+    """
+
+    for col, fkey in zip(cols, foreignkeys):
+        _ = connection.execute(
+            text(
+                f"ALTER TABLE {tablename} ADD FOREIGN KEY ({col}) "
+                f"REFERENCES {fkey} ON DELETE NO ACTION "
+                "ON UPDATE NO ACTION"
+            )
+        )
+
+
 def updateSQLschema(connection, tablename, schema):
     """Add comments to an existing table and set indexes and foreign keys
 
@@ -259,21 +328,17 @@ def updateSQLschema(connection, tablename, schema):
     # handle indexes
     indexes = schema.loc[schema["Index"] == 1, "Column"].values
     if len(indexes) > 0:
-        _ = connection.execute(
-            text(f"ALTER TABLE {tablename} ADD INDEX ({', '.join(indexes)})")
-        )
+        add_indexes(connection, tablename, indexes)
 
     # handle foregin keys
     foreignkeys = schema.loc[~schema["ForeignKey"].isna()]
     if len(foreignkeys) > 0:
-        for _, row in foreignkeys.iterrows():
-            _ = connection.execute(
-                text(
-                    f"ALTER TABLE {tablename} ADD FOREIGN KEY ({row.Column}) "
-                    f"REFERENCES {row.ForeignKey} ON DELETE NO ACTION "
-                    "ON UPDATE NO ACTION"
-                )
-            )
+        add_foreignkeys(
+            connection,
+            tablename,
+            foreignkeys["Column"].values,
+            foreignkeys["ForeignKey"].values,
+        )
 
     # grab the original table definition
     result = connection.execute(text(f"show create table {tablename}"))
