@@ -26,7 +26,6 @@ def gen_engine(username, db="plandb", server="127.0.0.1"):
 
     """
 
-    # grab password from keyring (or save if not yet saved)
     passwd = keyring.get_password(f"plandb_{server}_login", username)
     if passwd is None:
         newpass = True
@@ -34,14 +33,12 @@ def gen_engine(username, db="plandb", server="127.0.0.1"):
     else:
         newpass = False
 
-    # create engine
     engine = create_engine(
         f"mysql+pymysql://{username}:{passwd}@{server}/{db}",
         echo=False,
         pool_pre_ping=True,
     )
 
-    # open a connection to make sure everything works
     connection = engine.connect()
     _ = connection.execute(text("SHOW TABLES"))
     connection.close()
@@ -69,7 +66,6 @@ def proc_col_req(fname, engine, comment="#"):
 
     """
 
-    # read in column description
     ext = os.path.splitext(fname)[-1].split(os.extsep)[-1].lower()
     if ext == "csv":
         data = pandas.read_csv(fname, comment=comment)
@@ -78,7 +74,6 @@ def proc_col_req(fname, engine, comment="#"):
     else:
         raise NotImplementedError("Filetype must be csv, xls or xlsx.")
 
-    # check for correct columns
     expected_cols = [
         "MY_COLNAME",
         "DB_COLNAME",
@@ -103,29 +98,22 @@ def proc_col_req(fname, engine, comment="#"):
         len(set(data.columns).symmetric_difference(expected_cols)) == 0
     ), f'Input data must contain the columns: {", ".join(expected_cols)} ONLY'
 
-    # fill in missing DB cols for boolean keys
     for boolkey in ["NEW_KEY", "INDEX"]:
         data.loc[data[boolkey].isna(), boolkey] = False
 
-    # new keys without db_colname entries should use my_colname
     inds = (data["NEW_KEY"]) & (data["DB_COLNAME"].isna())
     data.loc[inds, "DB_COLNAME"] = data.loc[inds, "MY_COLNAME"]
 
-    # change any STRING datatypes to VARCHAR
     data.loc[data["SQL_DATATYPE"] == "STRING", "SQL_DATATYPE"] = "TEXT"
 
-    # verify that all rows are complete
     assert not (data[reqcols].isna().values.any()), "Input data is missing entries."
 
-    # find all requested tables
     req_tables = data["TABLE"].unique()
 
-    # grab all relevant tables and their current contents
     connection = engine.connect()
     tables = connection.execute(text("SHOW TABLES")).all()
     tables = [t[0] for t in tables]
 
-    # these are the tables we are augmenting
     existing_tables = list(set(req_tables).intersection(tables))
 
     existing_keys = {}
@@ -133,7 +121,6 @@ def proc_col_req(fname, engine, comment="#"):
         tmp = connection.execute(text(f"SHOW COLUMNS IN {t}")).all()
         existing_keys[t] = np.array([k[0] for k in tmp])
 
-    # identify all new requested keys and augemnt the tables
     for t in existing_tables:
         tmp = data.loc[data["TABLE"] == t]
         newkeys = tmp.loc[~tmp["DB_COLNAME"].isin(existing_keys[t])]
@@ -150,7 +137,6 @@ def proc_col_req(fname, engine, comment="#"):
 
             _ = connection.execute(text(comm))
 
-        # add any requested indexes and foreignkeys
         indexes = tmp.loc[tmp["INDEX"], "DB_COLNAME"].values
         if len(indexes) > 0:
             add_indexes(connection, t, indexes)
@@ -164,13 +150,11 @@ def proc_col_req(fname, engine, comment="#"):
                 foreignkeys["FOREIGNKEY"].values,
             )
 
-    # these are the new tables
     new_tables = list(set(req_tables) - set(existing_tables))
 
     for t in new_tables:
         tmp = data.loc[data["TABLE"] == t]
 
-        # generate create table text
         txt = []
         for jj, row in tmp.iterrows():
             txt.append(
@@ -325,12 +309,10 @@ def updateSQLschema(connection, tablename, schema):
 
     """
 
-    # handle indexes
     indexes = schema.loc[schema["Index"] == 1, "Column"].values
     if len(indexes) > 0:
         add_indexes(connection, tablename, indexes)
 
-    # handle foregin keys
     foreignkeys = schema.loc[~schema["ForeignKey"].isna()]
     if len(foreignkeys) > 0:
         add_foreignkeys(
@@ -340,16 +322,13 @@ def updateSQLschema(connection, tablename, schema):
             foreignkeys["ForeignKey"].values,
         )
 
-    # grab the original table definition
     result = connection.execute(text(f"show create table {tablename}"))
     res = result.fetchall()
     res = res[0][1]
     res = res.split("\n")
 
-    # define regex for parsing col defs
     p = re.compile(r"`(\S+)`[\s\S]+")
 
-    # loop through and find all col definitions without comments
     keys = []
     defs = []
     for r in res:
@@ -361,7 +340,6 @@ def updateSQLschema(connection, tablename, schema):
             keys.append(m.groups()[0])
             defs.append(r)
 
-    # compare schema and table
     missing_from_schema = list(set(keys) - set(schema["Column"].values))
     if len(missing_from_schema) > 0:
         warnings.warn(
@@ -389,3 +367,39 @@ def updateSQLschema(connection, tablename, schema):
             f'"{schema.loc[schema["Column"] == key, "Comments"].values[0]}";'  # noqa
         )
         _ = connection.execute(text(comm))
+
+
+def get_optimal_sql_datatypes(df: pandas.DataFrame) -> dict:
+    """
+    Generates optimal SQL datatypes for all columns in a pandas DataFrame.
+
+    Args:
+        df: The input DataFrame.
+
+    Returns:
+        A dictionary mapping column names to optimal SQL datatypes.
+    """
+    col_types = {}
+    for col in df.columns:
+        dtype = df[col].dtype
+        if np.issubdtype(dtype, np.integer):
+            min_val, max_val = df[col].min(), df[col].max()
+            if -128 <= min_val and max_val <= 127:
+                col_types[col] = "TINYINT"
+            elif -32768 <= min_val and max_val <= 32767:
+                col_types[col] = "SMALLINT"
+            elif -2147483648 <= min_val and max_val <= 2147483647:
+                col_types[col] = "INT"
+            else:
+                col_types[col] = "BIGINT"
+        elif np.issubdtype(dtype, np.floating):
+            col_types[col] = "DOUBLE"
+        elif dtype == np.bool_:
+            col_types[col] = "BOOLEAN"
+        else:
+            max_len = df[col].str.len().max()
+            if pandas.isna(max_len):
+                col_types[col] = "VARCHAR(255)"
+            else:
+                col_types[col] = f"VARCHAR({int(max_len)})"
+    return col_types
