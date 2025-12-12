@@ -5,16 +5,10 @@ from astroquery.vizier import Vizier
 from astroquery.exceptions import TableParseError 
 from astropy.coordinates import SkyCoord
 from astropy import units as u
-from sqlalchemy import create_engine
 import os
-import sys
-#ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # .../corgidbcopy
-#CORGI_DIR = os.path.join(ROOT_DIR, "corgidb")
-#sys.path.append(CORGI_DIR)
-#from ingest import gen_engine   
+import argparse
 from corgidb.ingest import gen_engine
 
-#change last line of code when done testing
 #run python -m Scripts.stellar_diameter_est
 
 Vizier.ROW_LIMIT = 50
@@ -54,13 +48,12 @@ def _extract_theta(table):
                 error = 0.1 * theta
             return float(theta), float(error)
 
-    #generic column names for ang diameter
+    #possible column names for ang diameter
     possible_cols = ['theta', 'diameter', 'ang_diam', 'D_']
     for col in cols:
         if col in possible_cols:
             theta = table[col][0]
             if theta is not None and not np.isnan(theta):
-                # try two common error conventions: col_err, e_col
                 for err_col in (col + '_err', 'e_' + col):
                     if err_col in cols:
                         error = table[err_col][0]
@@ -113,27 +106,38 @@ def calculate_stellar_diameter(BV, Vmag):
     if BV is None or Vmag is None:
         return None
 
-    # B-V polynomial fit coefficients:
     coeffs = [0.49612, 1.11136, -1.18694, 0.91974, -0.19526]
 
-    # evaluate eq. 2 using B-V color
+    # evaluate using B-V color
     logth_zero = 0.0
     for j, ai in enumerate(coeffs):
         logth_zero += ai * BV ** j
 
-    # now invert eq. 1 to get the actual diameter in mas
     theta = 10 ** (logth_zero - 0.2 * Vmag)
     return float(theta)
 
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--username",
+        default=os.getenv("PLANDB_USER"))
+    parser.add_argument(
+        "--db",
+        default=os.getenv("PLANDB_NAME", "plandb_scratch"))
+    parser.add_argument(
+        "--server",
+        default=os.getenv("PLANDB_SERVER", "127.0.0.1"),)
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=50)
+    parser.add_argument(
+        "--write",
+        action="store_true")
+    return parser.parse_args()
 
-
-def main(dry_run=True, limit=10):
-    # connect to db  (update with db=plandb when done testing)
-    engine = gen_engine(
-        username="plandb_user",
-        db="plandb_scratch",
-        server="127.0.0.1"
-    )
+def main(username, db, server, dry_run=True, limit=10):
+    engine = gen_engine(username=username, db=db, server=server)
     
     # identifies stars missing diameters 
     with engine.begin() as con:
@@ -180,7 +184,6 @@ def main(dry_run=True, limit=10):
         vmag = star['Vmag']
 
         print(f"\nProcessing {star_name} (ID: {star_id})")
-         # ensure ra/dec are usable numbers
         try:
             ra = float(ra) if ra is not None else None
             dec = float(dec) if dec is not None else None
@@ -230,9 +233,25 @@ def main(dry_run=True, limit=10):
 
     print(f"\ncomplete: Updated {success_count}/{len(updates)} Stars.")
 
-
 if __name__ == "__main__":
-    main(dry_run=True, limit=50) 
-    #first test only prints (current # of stars updated at a time: limit is currently 50)
-    #change to False to make changes (when done testing)
-    #change limit to update more stars at a time
+    args = parse_args()
+
+    if not args.username:
+        raise SystemExit(
+            "Missing DB username, use --username."
+        )
+
+    print(f"Using database: {args.db}")
+    print("Mode:", "WRITE" if args.write else "Dry Run")
+    
+    if not args.write:
+        print("re-run with --write to apply the changes")
+
+
+    main(
+        username=args.username,
+        db=args.db,
+        server=args.server,
+        dry_run=not args.write,
+        limit=args.limit
+    )
