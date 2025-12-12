@@ -8,15 +8,14 @@ from astropy import units as u
 from sqlalchemy import create_engine
 import os
 import sys
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # .../corgidbcopy
-CORGI_DIR = os.path.join(ROOT_DIR, "corgidb")
-sys.path.append(CORGI_DIR)
-from ingest import gen_engine   
-
-# connect to db  (update with db=plandb when done testing)
-engine = gen_engine(username="plandb_user", db="plandb_scratch", server="127.0.0.1")
+#ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # .../corgidbcopy
+#CORGI_DIR = os.path.join(ROOT_DIR, "corgidb")
+#sys.path.append(CORGI_DIR)
+#from ingest import gen_engine   
+from corgidb.ingest import gen_engine
 
 #change last line of code when done testing
+#run python -m Scripts.stellar_diameter_est
 
 Vizier.ROW_LIMIT = 50
 
@@ -129,6 +128,13 @@ def calculate_stellar_diameter(BV, Vmag):
 
 
 def main(dry_run=True, limit=10):
+    # connect to db  (update with db=plandb when done testing)
+    engine = gen_engine(
+        username="plandb_user",
+        db="plandb_scratch",
+        server="127.0.0.1"
+    )
+    
     # identifies stars missing diameters 
     with engine.begin() as con:
         result = con.execute(text("SHOW TABLES;"))
