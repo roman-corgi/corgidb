@@ -29,23 +29,26 @@ def check_pointing(tar: pd.DataFrame, obs_start: t.Time, obs_duration: t.TimeDel
     """Check that the observation window defined for a stars data does not violate any constraints
     
     Args:
-        tar (pandas.DataFrame): Target star data defined as a DataFrame
+        tar (pandas.DataFrame): Target star data defined as a single row DataFrame
         obs_start (astropy.time.Time): Start time of the observation
         obs_duration (astropy.time.Time): Duration of the observation
+        slices (int): The number of time slices to calculate angles for
     
     Returns:
         result (tuple[bool, list, list]): returns a boolean true/false if the observation is valid, and a list of pointings over the window for sun and pitch angles
     """
+    #Calculate times array to calculate each angle at.
     times = obs_start + obs_duration * np.linspace(0, 1, slices)
+    #Create Skycoord object for the target at the start time 
     tar_cords = c.SkyCoord(
-    tar.loc[0, "ra"] * u.degree, #is rads here, needs to convert to degrees.
-    tar.loc[0, "dec"] * u.degree, # is rads here needs to conver to deg
+    tar.loc[0, "ra"] * u.degree,
+    tar.loc[0, "dec"] * u.degree,
     unit=(u.degree, u.degree),
     frame="icrs",
-    distance=tar.loc[0,"sy_dist"] * u.parsec, # correct
-    pm_ra_cosdec=tar.loc[0,"sy_pmra"] * u.milliarcsecond / u.year, # is in miliarcsecs / year
-    pm_dec=tar.loc[0,"sy_pmdec"] * u.milliarcsecond / u.year, # as above
-    radial_velocity=tar.loc[0, "st_radv"] * u.km / u.second, # correct
+    distance=tar.loc[0,"sy_dist"] * u.parsec, 
+    pm_ra_cosdec=tar.loc[0,"sy_pmra"] * u.milliarcsecond / u.year, 
+    pm_dec=tar.loc[0,"sy_pmdec"] * u.milliarcsecond / u.year,
+    radial_velocity=tar.loc[0, "st_radv"] * u.km / u.second,
     equinox="J2000",
     obstime="J2000",
     ).transform_to(c.BarycentricMeanEcliptic)
