@@ -196,7 +196,7 @@ def proc_col_req(fname, engine, comment="#"):
 
 
 def gen_Scenarios_table(data, schema, engine):
-    """Populate SaturationCurves table
+    """Populates the Scenarios table.
 
     Args:
         data (pandas.DataFrame):
@@ -281,7 +281,7 @@ def add_indexes(connection, tablename, indexes):
 
 
 def add_foreignkeys(connection, tablename, cols, foreignkeys):
-    """Add foreign keys to table
+    """Adds foreign key constraints to an existing table.
 
     Args:
         connection (sqlalchemy.engine.base.Connection):
@@ -389,3 +389,39 @@ def updateSQLschema(connection, tablename, schema):
             f'"{schema.loc[schema["Column"] == key, "Comments"].values[0]}";'  # noqa
         )
         _ = connection.execute(text(comm))
+
+
+def get_optimal_sql_datatypes(df: pandas.DataFrame) -> dict:
+    """Generates optimal SQL datatypes for columns in a pandas DataFrame.
+
+    Args:
+        df (pandas.DataFrame): The input DataFrame.
+
+    Returns:
+        dict:
+            A dictionary mapping column names to optimal SQL datatypes.
+    """
+    col_types = {}
+    for col in df.columns:
+        dtype = df[col].dtype
+        if np.issubdtype(dtype, np.integer):
+            min_val, max_val = df[col].min(), df[col].max()
+            if -128 <= min_val and max_val <= 127:
+                col_types[col] = "TINYINT"
+            elif -32768 <= min_val and max_val <= 32767:
+                col_types[col] = "SMALLINT"
+            elif -2147483648 <= min_val and max_val <= 2147483647:
+                col_types[col] = "INT"
+            else:
+                col_types[col] = "BIGINT"
+        elif np.issubdtype(dtype, np.floating):
+            col_types[col] = "DOUBLE"
+        elif dtype == np.bool_:
+            col_types[col] = "BOOLEAN"
+        else:
+            max_len = df[col].str.len().max()
+            if pandas.isna(max_len):
+                col_types[col] = "VARCHAR(255)"
+            else:
+                col_types[col] = f"VARCHAR({int(max_len)})"
+    return col_types
