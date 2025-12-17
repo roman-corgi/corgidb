@@ -1,0 +1,119 @@
+"""
+Reference star tier selection for Roman CGI.
+Uses tier column from database (A/B/C) per CGI-REQ-1000.
+
+LAD285 - Issue #14
+"""
+
+import pandas as pd
+import numpy as np
+
+
+def select_best_ref_by_tier(candidates: pd.DataFrame, delta_pitch_col: str = 'delta_pitch') -> pd.Series:
+    """
+    Select best reference star using tier fallback (A -> B -> C).
+    Returns star with minimum delta_pitch in best available tier.
+    
+    Args:
+        candidates: DataFrame with 'tier' and delta_pitch columns
+        delta_pitch_col: Column name for delta pitch values
+    
+    Returns:
+        Best reference star as Series
+    """
+    if candidates.empty:
+        raise ValueError("No candidate reference stars provided")
+    
+    if 'tier' not in candidates.columns:
+        raise KeyError("Missing 'tier' column in candidates")
+    
+    if delta_pitch_col not in candidates.columns:
+        raise KeyError(f"Missing '{delta_pitch_col}' column in candidates")
+    
+    # Try each tier in order: A (best) -> B -> C (last resort)
+    for tier in ['A', 'B', 'C']:
+        tier_candidates = candidates[candidates['tier'] == tier]
+        
+        if not tier_candidates.empty:
+            # Found stars in this tier - return the one with min delta_pitch
+            best_idx = tier_candidates[delta_pitch_col].idxmin()
+            return candidates.loc[best_idx]
+    
+    raise ValueError("No valid tier found (expected A, B, or C)")
+
+
+def get_tier_distribution(candidates: pd.DataFrame) -> pd.DataFrame:
+    """
+    Show distribution of candidates across tiers.
+    Useful for debugging.
+    """
+    if 'tier' not in candidates.columns:
+        raise KeyError("Missing 'tier' column")
+    
+    dist = candidates.groupby('tier').size().reset_index(name='count')
+    dist['tier'] = pd.Categorical(dist['tier'], categories=['A', 'B', 'C'], ordered=True)
+    dist = dist.sort_values('tier').reset_index(drop=True)
+    
+    return dist
+
+
+def get_tier_summary(candidates: pd.DataFrame, delta_pitch_col: str = 'delta_pitch') -> dict:
+    """
+    Get summary of tier availability and best options.
+    Returns dict with counts and best delta_pitch per tier.
+    """
+    summary = {'total_candidates': len(candidates)}
+    
+    for tier in ['A', 'B', 'C']:
+        tier_candidates = candidates[candidates['tier'] == tier]
+        count = len(tier_candidates)
+        summary[f'tier_{tier}_count'] = count
+        
+        if count > 0:
+            summary[f'tier_{tier}_best_delta_pitch'] = tier_candidates[delta_pitch_col].min()
+        else:
+            summary[f'tier_{tier}_best_delta_pitch'] = None
+    
+    # Which tier will be selected
+    for tier in ['A', 'B', 'C']:
+        if summary[f'tier_{tier}_count'] > 0:
+            summary['selected_tier'] = tier
+            break
+    else:
+        summary['selected_tier'] = None
+    
+    return summary
+
+
+if __name__ == "__main__":
+    # Test the tier selection logic
+    print("Testing tier selection module\n")
+    
+    # Sample data
+    test_data = pd.DataFrame({
+        'st_name': ['11 Com', '14 And', '18 Del', '47 Uma', '16 Cyg B', '24 Boo'],
+        'tier': ['A', 'B', 'A', 'C', 'A', 'B'],
+        'sy_vmag': [4.72, 7.50, 5.51, 9.80, 6.22, 8.10],
+        'delta_pitch': [3.2, 5.1, 2.8, 9.5, 6.2, 1.9]
+    })
+    
+    print("Test candidates:")
+    print(test_data[['st_name', 'tier', 'sy_vmag', 'delta_pitch']])
+    
+    # Select best
+    best = select_best_ref_by_tier(test_data)
+    print(f"\nSelected: {best['st_name']}")
+    print(f"Tier: {best['tier']}, Delta pitch: {best['delta_pitch']:.2f}°")
+    
+    # Show distribution
+    print("\nTier distribution:")
+    print(get_tier_distribution(test_data))
+    
+    # Test fallback (remove Tier A)
+    print("\n" + "="*50)
+    print("Testing fallback (no Tier A available)")
+    test_no_a = test_data[test_data['tier'] != 'A'].copy()
+    
+    best_fallback = select_best_ref_by_tier(test_no_a)
+    print(f"Selected: {best_fallback['st_name']}")
+    print(f"Tier: {best_fallback['tier']} (fell back from A to B)")
