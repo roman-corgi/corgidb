@@ -16,7 +16,7 @@ def select_query_db(conn: sql.engine.base.Connection, stmt: sql.Select) -> pd.Da
         stmt (sqlalchemy.Select): sqlalchemy select statement for desired data
 
     Returns:
-        data (pandas.DataFrame): dataframe containing the desired data
+        pandas.DataFrame: dataframe containing the desired data
     """
     #change return into a dataframe
     raw_data = pd.read_sql(stmt, conn)
@@ -35,11 +35,11 @@ def check_pointing(tar: pd.DataFrame, obs_start: t.Time, obs_duration: t.TimeDel
         slices (int): The number of time slices to calculate angles for
     
     Returns:
-        result (tuple[bool, list, list]): returns a boolean true/false if the observation is valid, and a list of pointings over the window for sun and pitch angles
+        tuple[bool, list, list]: returns a boolean true/false if the observation is valid, and a list of pointings over the window for sun and pitch angles
     """
     #Calculate times array to calculate each angle at.
     times = obs_start + obs_duration * np.linspace(0, 1, slices)
-    #Create Skycoord object for the target at the start time 
+    #Create Skycoord object for the target at the start time
     tar_cords = c.SkyCoord(
     tar.loc[0, "ra"] * u.degree,
     tar.loc[0, "dec"] * u.degree,
@@ -52,8 +52,8 @@ def check_pointing(tar: pd.DataFrame, obs_start: t.Time, obs_duration: t.TimeDel
     equinox="J2000",
     obstime="J2000",
     ).transform_to(c.BarycentricMeanEcliptic)
-    #calculate angles of interest over the observation window 
-    sun_ang_targ, yaw_targ, pitch_targ, B_C_I_targ = rp.calcRomanAngles(
+    #calculate angles of interest over the observation window
+    sun_ang_targ, _, pitch_targ, _ = rp.calcRomanAngles(
     tar_cords, times, rp.getL2Positions(times)
     )
     #Convert angles to degrees
@@ -64,6 +64,7 @@ def check_pointing(tar: pd.DataFrame, obs_start: t.Time, obs_duration: t.TimeDel
         valid = False
     else:
         valid = True
+    #Construct return object
     result = valid, sun_ang_d_targ, pitch_d_targ
     return result
 
@@ -84,36 +85,45 @@ def select_ref_star(st_name: str, obs_start: t.Time, obs_duration: t.TimeDelta, 
     # Connect to the DB and get tables
     metadata = sql.MetaData()
     stars_table = sql.Table('Stars', metadata, autoload_with=engine)
-    # pass this connection to the query method to be used and then spun up and cleaned up in the calling method 
+    # Pass this connection to the query method to be used and then spun up and
+    # cleaned up in the calling method
     conn = engine.connect()
-    # query for a Star with the correct st_name entry
+    # Query for a Star with the correct st_name entry
     stmt = sql.select(stars_table).where(stars_table.c.st_name == st_name)
-    # Test values/statements for making sure that little bits of the code work
     sci_target = select_query_db(conn, stmt)
-    tar_val, tar_sun_angs, tar_pitch_angs = check_pointing(sci_target, obs_start, obs_duration)
+    # Check the Pointing of the target droping the Yaw angles
+    tar_val, _, tar_pitch_angs = check_pointing(sci_target, obs_start, obs_duration)
+    # Check sun angle contraint validity
     if tar_val is False:
+        # Print solar angle volation
         ref_star = "Observation window violates Solar angle Constraint"
         print(ref_star)
-        # logic to handle a observation that is not valid
     else:
-        ref_star = ""
+        # Set ref_star to none to initialize the selection process
+        ref_star = None
+        # List of all valid reference grades
         ref_grade = ['A','B','C']
-        i = 0
-        while ref_star is "" and i < 3:
-            cur_ref_grade = ref_grade[i]
-            ref_stmt= sql.select(stars_table).where(stars_table.c.st_psfgrade == cur_ref_grade)
+        # Check each star in each grade selecting the star 
+        # with the min delta pitch from the best grade
+        for grade in  ref_grade:
+            ref_stmt= sql.select(stars_table).where(stars_table.c.st_psfgrade == grade)
             ref_stars_data = select_query_db(conn, ref_stmt)
+            best_del_pitch = 10
             for record in ref_stars_data.to_dict(orient="records"):
                 cur_tar_star = pd.DataFrame.from_dict(record)
-                ref_val, ref_sun_angs, ref_pitch_angs = check_pointing(cur_tar_star, obs_start, obs_duration)
+                ref_val, _, ref_pitch_angs = check_pointing(cur_tar_star, obs_start, obs_duration)
                 if ref_val:
                     del_pitch = np.array(tar_pitch_angs) - np.array(ref_pitch_angs)
                     max_pitch = np.abs(np.max(del_pitch))
-                    if max_pitch < 5:
+                    if max_pitch < 5 and max_pitch < best_del_pitch:
                         ref_star = record.loc[0, "st_name"]
-                        i = 3
-            i = i + 1
-        if ref_star == "":
+                        best_del_pitch = max_pitch
+            # Exit the selection process if any refence star it found
+            if ref_star is not None:
+                break
+        # Check to make sure that a valid reference star was found
+        if ref_star is None:
+            # If no reference star was found print info and return info message
             ref_star = f"No refrence star of class A, B, or C was found for {st_name} between {obs_start} and {obs_start+obs_duration}"
-        # Logic to start selecting reference stars
+            print(ref_star)
     return ref_star
