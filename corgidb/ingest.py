@@ -90,12 +90,13 @@ def proc_col_req(fname, engine, comment="#"):
         "INDEX",
         "FOREIGNKEY",
     ]
+
+    # cols required to be completely filled
     reqcols = [
         "MY_COLNAME",
         "DB_COLNAME",
         "TABLE",
         "NEW_KEY",
-        "SQL_DATATYPE",
         "INDEX",
     ]
 
@@ -105,11 +106,16 @@ def proc_col_req(fname, engine, comment="#"):
 
     # fill in missing DB cols for boolean keys
     for boolkey in ["NEW_KEY", "INDEX"]:
-        data.loc[data[boolkey].isna(), boolkey] = False
+        with pandas.option_context("future.no_silent_downcasting", True):
+            data[boolkey] = data[boolkey].fillna(False).infer_objects(copy=False)
 
     # new keys without db_colname entries should use my_colname
     inds = (data["NEW_KEY"]) & (data["DB_COLNAME"].isna())
     data.loc[inds, "DB_COLNAME"] = data.loc[inds, "MY_COLNAME"]
+
+    # sanitize column names
+    # remove periods form db colnames
+    data["DB_COLNAME"] = data["DB_COLNAME"].str.replace(".", "p")
 
     # change any STRING datatypes to VARCHAR
     data.loc[data["SQL_DATATYPE"] == "STRING", "SQL_DATATYPE"] = "TEXT"
@@ -143,6 +149,9 @@ def proc_col_req(fname, engine, comment="#"):
         )
 
         for jj, row in newkeys.iterrows():
+            if pandas.isna(row.SQL_DATATYPE):
+                print(f"No datatype available for {row.DB_COLNAME}")
+                continue
             comm = (
                 f"""ALTER TABLE {t} ADD COLUMN {row.DB_COLNAME} {row.SQL_DATATYPE} """
                 f"""COMMENT "{row.DESCRIPTION}";"""  # noqa
@@ -424,4 +433,32 @@ def get_optimal_sql_datatypes(df: pandas.DataFrame) -> dict:
                 col_types[col] = "VARCHAR(255)"
             else:
                 col_types[col] = f"VARCHAR({int(max_len)})"
+    return col_types
+
+
+def get_sqlalchemy_types(col_types: dict) -> dict:
+    """Given a dictionary of SQL data types, return the equivalent sqlalchemy types
+
+    Args:
+        col_types (dict):
+            The output of `get_optimal_sql_datatypes`
+
+    Returns:
+        dict:
+            Equivalent dictionary but with values all from sqlachemy.typs
+
+    """
+
+    p = re.compile(r"^([A-Za-z]+)(?:\((\d+)\))?$")
+    for key in col_types:
+        if col_types[key] == 'TINYINT':
+            col_types[key] = types.SmallInteger
+            continue
+
+        tmp = p.match(col_types[key])
+        val = getattr(types, tmp.group(1))
+        if tmp.group(2) is not None:
+            val = val(int(tmp.group(2)))
+        col_types[key] = val
+
     return col_types
