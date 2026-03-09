@@ -2,7 +2,7 @@
   1. Load all rows from the Stars table that carry a grade (A/B/C) in any
      of the six grade columns.
   2. For every row, fill in whatever values are missing:
-       sy_dist  — derived from sy_plx (parallax in mas → parsec) where absent
+       sy_dist  — derived from sy_plx (parallax in mas to parsec) where absent
        sy_vmag  — queried from SIMBAD where absent
        sy_imag  — queried from SIMBAD; if still absent, derived via EXOSIMS
                   synthetic photometry (sy_vmag + spectype = I-band)
@@ -458,11 +458,12 @@ def load_and_fill(
           f"sy_imag={was_missing['sy_imag'].sum()} missing, "
           f"sy_dist={was_missing['sy_dist'].sum()} missing in DB.")
 
-    return df   # full filled catalog, ready for picker.py
+    return df
 
 
 if __name__ == "__main__":
     import corgidb.ingest
 
     eng = corgidb.ingest.gen_engine('plandb_user', 'plandb_scratch')
+
     load_and_fill(eng)
