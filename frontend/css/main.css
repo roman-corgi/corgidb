@@ -1,0 +1,149 @@
+body {
+   min-width:825px;        
+   width: auto !important;
+}
+
+header {
+  background-color: #483D8B;
+  height: 35px;
+  width: 100%;
+  opacity: .9;
+  padding: 10px 0px 5px 0px;
+
+}
+ 
+header h1.logo {
+  margin: 0;
+  font-size: 1.7em;
+  color: #C0C0C0;
+  text-transform: uppercase;
+  float: left;
+  margin-left: 10px;
+}
+ 
+header h1.logo:hover {
+  color: #fff;
+  text-decoration: none;
+}
+
+header h1 a {
+    color:#C0C0C0;
+    text-decoration: none;
+}
+
+header img{
+  float: left;
+  width: 80px;
+}
+
+div.container {
+  margin: auto;
+  background-color: white;
+}
+
+/*
+ * Alignment Classes
+ */
+.right{
+    float:right;
+}
+
+.left{
+    float:left;
+}
+
+/*
+ * Display navigation links inline
+ */
+ 
+.menu {
+  list-style-type: none;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background-color: #333;
+}
+ 
+.menu li {
+    float: left; 
+    border-right: 1px solid #bbb;
+}
+ 
+.menu li:last-child {
+    border-right: none;
+}
+
+.menu li a {
+  color: #FFF5EE;
+  text-decoration: none;
+  display: block;
+  text-align: center;
+  padding: 14px 16px;
+}
+
+.menu li a:hover {
+  background-color: #111;
+}
+
+
+table.results {
+    margin-left: 5%;
+    margin-right: 5%;
+    width: 90%;
+}
+
+th {
+  background-color: #B0B0B0;
+  color: #000000;
+}
+
+th:after {
+    content: "\00a0\00a0\00a0";
+}
+
+th.major {
+  background-color: #909090;
+  color: #FFFFFF;
+}
+
+th.minor {
+  background-color: #B0B0B0;
+  color: #FFFFFF;
+  width: 150px;
+
+}
+
+th.dark {
+   background-color: #32455B;    /* same as page background */
+   color: skyblue;
+   font-size: 1.2em;
+   padding-top: 5px;
+
+}
+
+table.results thead tr .header {
+	background-image: url(bg.gif);
+	background-repeat: no-repeat;
+	background-position: center right;
+	cursor: pointer;
+}
+
+table.results thead tr .headerSortUp {
+	background-image: url(asc.gif);
+}
+table.results thead tr .headerSortDown {
+	background-image: url(desc.gif);
+}
+table.results thead tr .headerSortDown, table.results thead tr .headerSortUp {
+background-color: #8dbdd8;
+}
+
+table.results tr:nth-child(even) {background: #CCC}
+table.results tr:nth-child(odd) {background: #FFF}
+
+div.results-outer{
+    overflow-x: scroll;
+}
+
+
+
