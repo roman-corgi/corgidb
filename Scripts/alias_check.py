@@ -28,17 +28,17 @@ def alias_check(name: str):
         dataframe = None
     return dataframe
 
-def int_alias_check(nameList: list):
+def int_alias_check(name_list: list):
     """Checks the provided name agains the SIMBAD reference DB and returns all aliases 
     
     Args:
         nameList (list): list of input names to check for aliases
     
     Returns:
-        aliases (pandas.Dataframe): 2 x n dataframe of all aliases for the given name and the main identifier
+        aliasData (pandas.Dataframe): 2 x n dataframe of all aliases for the given name and the main identifier
     """
-    aliasData = pd.DataFrame()
-    for name in nameList:
+    alias_data = pd.DataFrame()
+    for name in name_list:
         result = Simbad.query_object(name)
         if result is not None:
             main_id = result['main_id'][0]
@@ -48,7 +48,7 @@ def int_alias_check(nameList: list):
                 main_list = [main_id] * len(alias_list)
                 data = {'Alias': alias_list, 'Main ID': main_list}
                 dataframe = pd.DataFrame(data)
-                aliasData = pd.concat([aliasData, dataframe], )
+                alias_data = pd.concat([alias_data, dataframe], ignore_index=True)
             else:
                 print(f"ID query for {name} failed, check entry")
                 dataframe = None
@@ -57,7 +57,7 @@ def int_alias_check(nameList: list):
             print(f"Object {name} not found in Simbad")
             dataframe = None
             break
-    return aliasData
+    return alias_data
 
 # test if it is more efficient to loop over single names or to query a list and then loop through aliases 
 
@@ -65,8 +65,8 @@ testList = ['Chi Uma', 'Omega Uma', '56 Uma', '58 Uma']
 start_time1 = time.perf_counter()
 all_data = pd.DataFrame()
 for star in testList:
-    data = alias_check(star)
-    all_data = pd.concat([all_data, data], ignore_index=True)
+    out_data = alias_check(star)
+    all_data = pd.concat([all_data, out_data], ignore_index=True)
 stop_time1 = time.perf_counter()
 print(all_data)
 elapsed_time1 = stop_time1 - start_time1
