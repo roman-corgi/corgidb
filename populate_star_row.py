@@ -9,28 +9,19 @@ import warnings
 # Suppress astroquery warnings for cleaner output
 warnings.filterwarnings('ignore', category=UserWarning)
 
+
 def populate_star_row(star_id):
     """
     Query astronomical catalogs and return a populated row for Stars table
-    
-    Parameters
-    ----------
-    star_id : str
-        Star identifier resolvable by SIMBAD
-        Examples: "Vega", "HD 209458", "HIP 116852"
-    
-    Returns
-    -------
-    pandas.Series
-        Row with all available data, NaN for missing values
+
     """
     
     print(f"Querying {star_id}...")
     
-    # Initialize data dictionary
+    # Initialize data dictionary with all Stars table columns
     data = initialize_empty_row()
     
-    # Query SIMBAD basic data (GREEN fields)
+    # Query SIMBAD for basic astrometric and photometric data
     simbad_data = query_simbad_basic(star_id)
     if simbad_data is None:
         print(f"  ✗ {star_id} not found in SIMBAD")
@@ -38,24 +29,24 @@ def populate_star_row(star_id):
     data.update(simbad_data)
     print(f"  ✓ SIMBAD basic data retrieved")
     
-    # Query SIMBAD Collections (BLUE fields)
+    # Query SIMBAD Collections for stellar parameters
     collections_data = query_simbad_collections(star_id)
     if collections_data is not None:
         data.update(collections_data)
         print(f"  ✓ SIMBAD Collections retrieved")
     
-    # Query Vizier catalogs (YELLOW fields)
+    # Query Vizier catalogs for additional photometry
     vizier_data = query_vizier_all(star_id)
     if vizier_data is not None:
         data.update(vizier_data)
         print(f"  ✓ Vizier catalogs queried")
     
-    # Calculate derived fields (ORANGE fields)
+    # Calculate derived fields from retrieved data
     derived_data = calculate_derived_fields(data)
     data.update(derived_data)
     print(f"  ✓ Derived fields calculated")
     
-    # Convert to Series
+    # Convert to Series and return
     row = pd.Series(data)
     
     return row
@@ -63,6 +54,8 @@ def populate_star_row(star_id):
 
 def initialize_empty_row():
     """Initialize dictionary with all Stars table columns as NaN"""
+
+  
     
     columns = [
         'st_id', 'simbad_name', 'st_name',
@@ -117,7 +110,10 @@ def initialize_empty_row():
 
 
 def query_simbad_basic(star_id):
-    """Query SIMBAD for basic data (GREEN fields)"""
+    """
+    Query SIMBAD for basic astrometric and photometric data
+
+    """
     
     try:
         custom_simbad = Simbad()
@@ -132,17 +128,17 @@ def query_simbad_basic(star_id):
         
         data = {}
         
-        # Main ID and coordinates
+        # Main identifier and coordinates
         data['simbad_name'] = result['main_id'][0]
         data['ra'] = result['ra'][0]
         data['dec'] = result['dec'][0]
         
-        # RA/Dec as strings
+        # Format RA/Dec as sexagesimal strings
         coord = SkyCoord(ra=data['ra']*u.deg, dec=data['dec']*u.deg, frame='icrs')
         data['rastr'] = coord.ra.to_string(unit=u.hourangle, sep=' ', precision=2)
         data['decstr'] = coord.dec.to_string(unit=u.deg, sep=' ', precision=2)
         
-        # Proper motion
+        # Proper motion (check for masked values)
         if 'pmra' in result.colnames and not isinstance(result['pmra'][0], np.ma.core.MaskedConstant):
             data['sy_pmra'] = result['pmra'][0]
         if 'pmdec' in result.colnames and not isinstance(result['pmdec'][0], np.ma.core.MaskedConstant):
@@ -160,7 +156,7 @@ def query_simbad_basic(star_id):
         if 'sp_type' in result.colnames and not isinstance(result['sp_type'][0], np.ma.core.MaskedConstant):
             data['st_spectype'] = result['sp_type'][0]
         
-        # Photometry
+        # Photometry in multiple bands
         flux_map = {'B': 'sy_bmag', 'V': 'sy_vmag', 'J': 'sy_jmag', 
                     'H': 'sy_hmag', 'K': 'sy_kmag', 'I': 'sy_icmag', 'G': 'sy_gaiamag'}
         
@@ -168,7 +164,7 @@ def query_simbad_basic(star_id):
             if band in result.colnames and not isinstance(result[band][0], np.ma.core.MaskedConstant):
                 data[field] = result[band][0]
         
-        # Parse catalog IDs
+        # Parse catalog cross-identifications
         if 'ids' in result.colnames:
             catalog_ids = parse_catalog_ids(result['ids'][0])
             data.update(catalog_ids)
@@ -200,7 +196,10 @@ def parse_catalog_ids(ids_string):
 
 
 def query_simbad_collections(star_id):
-    """Query SIMBAD Collections for stellar parameters (BLUE fields)"""
+    """
+    Query SIMBAD Collections for stellar parameters
+
+    """
     
     try:
         collections_simbad = Simbad()
@@ -213,7 +212,8 @@ def query_simbad_collections(star_id):
         
         data = {}
         
-        # Stellar parameters from Fe_H table
+        # Stellar parameters from Fe_H measurements table
+        # Note: Teff, log g, and [Fe/H] come bundled from same measurement
         if 'mesfe_h.teff' in result.colnames and not isinstance(result['mesfe_h.teff'][0], np.ma.core.MaskedConstant):
             data['st_teff'] = result['mesfe_h.teff'][0]
         
@@ -226,14 +226,15 @@ def query_simbad_collections(star_id):
         if 'mesfe_h.compstar' in result.colnames and not isinstance(result['mesfe_h.compstar'][0], np.ma.core.MaskedConstant):
             data['st_metratio'] = result['mesfe_h.compstar'][0]
         
-        # Rotation from mesrot table
+        # Rotational velocity from rotation measurements table
         if 'mesrot.vsini' in result.colnames and not isinstance(result['mesrot.vsini'][0], np.ma.core.MaskedConstant):
             data['st_vsin'] = result['mesrot.vsini'][0]
+            # Include error if available
             if 'mesrot.vsini_err' in result.colnames:
                 err = result['mesrot.vsini_err'][0]
                 if not isinstance(err, np.ma.core.MaskedConstant):
                     data['st_vsinerr1'] = err
-                    data['st_vsinerr2'] = -err
+                    data['st_vsinerr2'] = -err  # Symmetric error
         
         return data
         
@@ -243,11 +244,14 @@ def query_simbad_collections(star_id):
 
 
 def query_vizier_all(star_id):
-    """Query all Vizier catalogs (YELLOW fields)"""
+    """
+    Query Vizier catalogs for additional photometry and stellar parameters
+
+    """
     
     data = {}
     
-    # AllWISE - WISE photometry
+    # AllWISE (II/328) - WISE infrared photometry
     try:
         v = Vizier(columns=["**"], row_limit=1)
         result = v.query_object(star_id, catalog="II/328")
@@ -264,7 +268,7 @@ def query_vizier_all(star_id):
     except:
         pass
     
-    # SDSS - Sloan photometry
+    # SDSS DR16 (V/154) - Sloan optical photometry
     try:
         v = Vizier(columns=["**"], row_limit=1)
         result = v.query_object(star_id, catalog="V/154")
@@ -283,7 +287,7 @@ def query_vizier_all(star_id):
     except:
         pass
     
-    # TIC - TESS magnitude + stellar parameters!
+    # TIC v8 (IV/38) - TESS magnitudes and stellar parameters
     try:
         v = Vizier(columns=["**"], row_limit=1)
         result = v.query_object(star_id, catalog="IV/38/tic")
@@ -293,7 +297,7 @@ def query_vizier_all(star_id):
             if 'Tmag' in result[0].colnames:
                 data['sy_tmag'] = result[0]['Tmag'][0]
             
-            # Stellar mass (from TIC!)
+            # Stellar mass
             if 'Mass' in result[0].colnames:
                 data['st_mass'] = result[0]['Mass'][0]
                 if 'E_Mass' in result[0].colnames:
@@ -301,7 +305,7 @@ def query_vizier_all(star_id):
                     data['st_masserr1'] = err
                     data['st_masserr2'] = -err
             
-            # Stellar radius (from TIC!)
+            # Stellar radius
             if 'Rad' in result[0].colnames:
                 data['st_rad'] = result[0]['Rad'][0]
                 if 'E_Rad' in result[0].colnames:
@@ -315,34 +319,39 @@ def query_vizier_all(star_id):
 
 
 def calculate_derived_fields(data):
-    """Calculate derived fields (ORANGE fields)"""
+    """
+    Calculate derived astronomical quantities
+
+    """
     
     derived = {}
     
-    # Galactic and Ecliptic coordinates
+    # Transform coordinates to Galactic and ecliptic systems
     if not np.isnan(data.get('ra', np.nan)) and not np.isnan(data.get('dec', np.nan)):
         coord = SkyCoord(ra=data['ra']*u.deg, dec=data['dec']*u.deg, frame='icrs')
         
+        # Galactic coordinates
         galactic = coord.galactic
         derived['glon'] = galactic.l.deg
         derived['glat'] = galactic.b.deg
         
+        # Ecliptic coordinates
         ecliptic = coord.transform_to('geocentrictrueecliptic')
         derived['elon'] = ecliptic.lon.deg
         derived['elat'] = ecliptic.lat.deg
     
-    # Total proper motion
+    # Total proper motion from components
     pmra = data.get('sy_pmra', np.nan)
     pmdec = data.get('sy_pmdec', np.nan)
     if not (np.isnan(pmra) or np.isnan(pmdec)):
         derived['sy_pm'] = np.sqrt(pmra**2 + pmdec**2)
     
-    # Distance from parallax
+    # Distance from parallax (convert mas to pc)
     plx = data.get('sy_plx', np.nan)
     if not np.isnan(plx) and plx > 0:
         derived['sy_dist'] = 1000.0 / plx
     
-    # Density from mass and radius
+    # Stellar density from mass and radius
     mass = data.get('st_mass', np.nan)
     radius = data.get('st_rad', np.nan)
     if not (np.isnan(mass) or np.isnan(radius)) and radius > 0:
@@ -352,7 +361,7 @@ def calculate_derived_fields(data):
     return derived
 
 
-# Test function
+# Test/demonstration code
 if __name__ == "__main__":
     print("Testing populate_star_row function...")
     print("=" * 60)
@@ -376,7 +385,6 @@ if __name__ == "__main__":
             print(f"  log g: {row['st_logg']:.2f}")
         if not np.isnan(row['st_met']):
             print(f"  [Fe/H]: {row['st_met']:.2f}")
-        # Check if value is not NaN and not masked
         if not np.isnan(row['st_mass']) and not isinstance(row['st_mass'], np.ma.core.MaskedConstant):
             print(f"  Mass: {row['st_mass']:.3f} M☉")
         if not np.isnan(row['st_rad']) and not isinstance(row['st_rad'], np.ma.core.MaskedConstant):
