@@ -1,5 +1,6 @@
 import requests
 import pandas
+import numpy as np
 
 url = "https://corgidb.sioslab.com/fetch_refs.php"
 response = requests.get(url, headers={"User-Agent": "XY"})
