@@ -1,6 +1,6 @@
 """Reference star selection module for the Roman Space Telescope.
 
-    - Loading the reference star catalog from the DB (read-only, no gap-filling).
+    - Loading the reference star catalog 
     - Building astropy SkyCoords from catalog rows using J2000 coordinates.
     - Computing Roman's observable windows via keepout.
     - Checking solar angle and pitch angle constraints day-by-day per window.
@@ -8,7 +8,7 @@
 
 Overall Flow:
     1. User specifies band (1, 3, or 4) and contrast level ('high' or 'med').
-       These together select the correct grade column from the DB::
+       These together select the correct grade column::
 
            Band 1  high  ==  st_psfgrade_nfb1_high
            Band 1  med   ==  st_psfgrade_nfb1_med
@@ -49,12 +49,16 @@ Overall Flow:
 """
 
 import os
+import time
+import warnings
+from pathlib import Path
+
 import numpy as np
 import astropy.units as u
 from astropy.time import Time
 import astropy.coordinates as c
 import pandas as pd
-import sqlalchemy as sql
+import requests
 
 from roman_pointing.roman_observability import (
     get_target_coords,
@@ -111,6 +115,31 @@ CATALOG_COLUMNS = [
 
 LARGE_SENTINEL = 1e9
 
+
+# Catalog fetch / cache constants
+CATALOG_URL = "https://corgidb.sioslab.com/fetch_refs.php"
+
+#: On-disk CSV cache placed next to this module.
+DEFAULT_CACHE_PATH = Path(__file__).parent / "ref_star_catalog_cache.csv"
+
+#: Hours before the cache is considered stale and a live fetch is attempted.
+MAX_CACHE_AGE_HOURS = 24.0
+
+#: Column order returned by the fetch endpoint.
+_FETCH_COLUMNS = [
+    "st_name",
+    "main_id",
+    "ra",
+    "dec",
+    "spectype",
+    "sy_vmag",
+    "sy_imag",
+    "sy_dist",
+    "sy_plx",
+    "sy_pmra",
+    "sy_pmdec",
+    "st_radv",
+]
 
 def safe_float(value):
     """Return the float representation of a value, or None if missing or NaN.
@@ -188,154 +217,202 @@ def make_sort_key(sort_mode):
 
     return key
 
+def _cache_is_fresh(cache_path: Path, max_age_hours: float) -> bool:
+    """Return True if *cache_path* exists and is younger than *max_age_hours*."""
+    if not cache_path.exists():
+        return False
+    age_seconds = time.time() - cache_path.stat().st_mtime
+    return age_seconds < max_age_hours * 3600
 
-def load_catalog(engine):
-    """Load the reference star catalog from the database.
 
-    Reads are performed in read-only fashion; no gap-filling or writes occur.
-    Only stars that carry a grade (A, B, or C) in at least one of the six
-    grade columns are returned. Numeric columns are coerced in memory.
+def _fetch_catalog(url: str) -> pd.DataFrame:
+    """Download the catalog from *url* and return a raw DataFrame.
 
-    Args:
-        engine (sqlalchemy.engine.base.Engine): SQLAlchemy engine connected
-            to plandb.
-
-    Returns:
-        pandas.DataFrame: One row per graded star.
-
-    Raises:
-        RuntimeError: If no populated grade columns are found in the database.
+    The endpoint returns a JSON array-of-arrays (rows × columns).
+    Columns follow the order in ``_FETCH_COLUMNS``; the server may append
+    extra grade columns after those.
     """
-    metadata = sql.MetaData()
-    stars_table = sql.Table('Stars', metadata, autoload_with=engine)
-    actual_cols = {col.name for col in stars_table.columns}
-
-    present_grade_cols = [col for col in ALL_GRADE_COLUMNS if col in actual_cols]
-
-    all_null = True
-    if present_grade_cols:
-        with engine.connect() as conn:
-            for gcol in present_grade_cols:
-                count = conn.execute(
-                    sql.text(f"SELECT COUNT(*) FROM Stars WHERE {gcol} IS NOT NULL")
-                ).scalar()
-                if count and count > 0:
-                    all_null = False
-                    break
-
-    if not present_grade_cols or all_null:
-        fallback = 'st_psfgrade'
-        if fallback in actual_cols:
-            print(f"  New grade columns are all NULL — falling back to '{fallback}'.")
-            present_grade_cols = [fallback]
-        else:
-            raise RuntimeError(
-                f"No populated grade columns found in Stars table. "
-                f"Tried {ALL_GRADE_COLUMNS} (all NULL) and '{fallback}' (absent). "
-                f"Available columns: {sorted(actual_cols)}"
-            )
-
-    absent = set(ALL_GRADE_COLUMNS) - set(present_grade_cols)
-    if absent:
-        print(f"  Note: grade column(s) not in DB yet: {sorted(absent)}")
-
-    grade_sel = [
-        getattr(stars_table.c, col)
-        for col in present_grade_cols
-        if col in actual_cols
-    ]
-    base_sel = [
-        getattr(stars_table.c, col)
-        for col in CATALOG_COLUMNS
-        if col in actual_cols
-    ]
-
-    where_clause = sql.or_(
-        *[getattr(stars_table.c, col).isnot(None) for col in present_grade_cols]
-    )
-    stmt = sql.select(*base_sel, *grade_sel).where(where_clause)
-
-    with engine.connect() as conn:
-        df = pd.read_sql(stmt, conn)
-
-    for col in ALL_GRADE_COLUMNS:
-        if col not in df.columns:
-            df[col] = np.nan
-
-    for col in ('sy_vmag', 'sy_imag', 'sy_dist', 'sy_plx',
-                'sy_pmra', 'sy_pmdec', 'st_radv'):
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-
-    missing_dist = (
-        df['sy_dist'].isna()
-        & df['sy_plx'].notna()
-        & (df['sy_plx'] > 0)
-    )
-    n_derived = int(missing_dist.sum())
-    if n_derived:
-        from astropy.coordinates import Distance
-        df.loc[missing_dist, 'sy_dist'] = Distance(
-            parallax=df.loc[missing_dist, 'sy_plx'].values * u.mas
-        ).pc
-        print(
-            f"  Derived sy_dist from sy_plx for {n_derived} star(s) (in memory only)."
+    try:
+        resp = requests.get(
+            url,
+            headers={"User-Agent": "RomanRefStarPicker/1.0"},
+            timeout=30,
         )
+        resp.raise_for_status()
+    except requests.RequestException as exc:
+        raise RuntimeError(f"HTTP fetch failed for {url!r}: {exc}") from exc
 
-    df['mag_v'] = df['sy_vmag']
-    df['mag_i'] = df['sy_imag']
+    try:
+        raw = resp.json()
+    except ValueError as exc:
+        raise RuntimeError(f"JSON decode failed for {url!r}: {exc}") from exc
 
-    print(f"Catalog loaded: {len(df)} graded reference star(s).")
+    if not raw:
+        raise RuntimeError(f"Empty response from {url!r}")
+
+    # rows to columns
+    data = np.vstack(raw).transpose()
+    n_cols = len(data)
+
+    base = list(_FETCH_COLUMNS)
+    extra_slots = n_cols - len(base)
+    if extra_slots > 0:
+        extra_names = ALL_GRADE_COLUMNS[:extra_slots]
+        col_names = base + extra_names
+    else:
+        col_names = base[:n_cols]
+
+    df = pd.DataFrame({name: col for name, col in zip(col_names, data)})
+    print(f"  Catalog columns from server ({len(df.columns)}): {list(df.columns)}")
     return df
 
 
-def get_science_mag(sci_name, band, engine=None):
-    """Look up the science target magnitude in the Stars table.
+def _coerce_catalog(df: pd.DataFrame) -> pd.DataFrame:
+    """Coerce numeric columns, fill missing grade columns, derive dist from plx."""
+    for col in ('ra', 'dec', 'sy_vmag', 'sy_imag',
+                'sy_dist', 'sy_plx', 'sy_pmra', 'sy_pmdec', 'st_radv'):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
 
-    The database is accessed in read-only fashion. Returns ``None`` if the
-    magnitude is not found, in which case the caller falls back to
-    brightest-first sorting.
+    # Ensure every grade column exists (NaN when not returned by the server)
+    for gcol in ALL_GRADE_COLUMNS:
+        if gcol not in df.columns:
+            df[gcol] = np.nan
+
+    # Derive sy_dist from parallax where missing
+    if 'sy_dist' in df.columns and 'sy_plx' in df.columns:
+        missing_dist = (
+            df['sy_dist'].isna()
+            & df['sy_plx'].notna()
+            & (df['sy_plx'] > 0)
+        )
+        n_derived = int(missing_dist.sum())
+        if n_derived:
+            from astropy.coordinates import Distance
+            df.loc[missing_dist, 'sy_dist'] = Distance(
+                parallax=df.loc[missing_dist, 'sy_plx'].values * u.mas
+            ).pc
+            print(
+                f"  Derived sy_dist from sy_plx for {n_derived} "
+                f"star(s) (in memory only)."
+            )
+
+    df['mag_v'] = df.get('sy_vmag')
+    df['mag_i'] = df.get('sy_imag')
+    return df
+
+
+def load_catalog(
+    engine=None,
+    url: str = CATALOG_URL,
+    cache_path=None,
+    max_cache_age_hours: float = MAX_CACHE_AGE_HOURS,
+    force_refresh: bool = False,
+) -> pd.DataFrame:
+    """Load the reference-star catalog from the web, with transparent disk caching.
+
+    On the first call (or when the cache is stale) the catalog is fetched from
+    *url* and saved as a Parquet file next to this module.  Subsequent calls
+    within *max_cache_age_hours* read from disk without touching the network.
+
+    The *engine* argument is accepted for call-site compatibility with code
+    that previously passed a SQLAlchemy engine, but it is ignored.
+
+    Fetch / cache strategy
+    1. Cache is fresh return it immediately.
+    2. Otherwise fetch from *url*, save to cache, return new data.
+    3. Fetch fails but stale cache exists ==  warn and use stale cache.
+    4. Fetch fails and no cache == raise ``RuntimeError``.
+
+    Args:
+        engine: Ignored (kept for backwards compatibility).
+        url (str): Catalog endpoint.  Defaults to ``CATALOG_URL``.
+        cache_path: Override the default Parquet cache location.
+        max_cache_age_hours (float): Hours before the cache is stale.
+            Pass ``float('inf')`` to never auto-refresh.
+        force_refresh (bool): If ``True``, always fetch even when fresh.
+
+    Returns:
+        pandas.DataFrame: One row per reference star.
+
+    Raises:
+        RuntimeError: If the fetch fails and no cache is available.
+    """
+    resolved_cache = Path(cache_path) if cache_path else DEFAULT_CACHE_PATH
+
+    # 1. Return fresh cache immediately
+    if not force_refresh and _cache_is_fresh(resolved_cache, max_cache_age_hours):
+        print(f"Loading catalog from cache ({resolved_cache.name})...")
+        df = pd.read_csv(resolved_cache, low_memory=False)
+        print(f"Catalog loaded: {len(df)} reference star(s).")
+        return df
+
+    # 2. Attempt live fetch
+    fetch_error = None
+    print(f"Fetching catalog from {url} ...")
+    try:
+        df = _fetch_catalog(url)
+        df = _coerce_catalog(df)
+        resolved_cache.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(resolved_cache, index=False)
+        print(f"  Catalog cached → {resolved_cache}")
+        print(f"Catalog loaded: {len(df)} reference star(s).")
+        return df
+    except Exception as exc:
+        fetch_error = exc
+        print(f"  Fetch failed: {exc}")
+
+    # 3. Fall back to stale cache
+    if resolved_cache.exists():
+        warnings.warn(
+            f"Live fetch failed ({fetch_error}). "
+            f"Using stale cache: {resolved_cache}",
+            UserWarning,
+            stacklevel=2,
+        )
+        df = pd.read_csv(resolved_cache, low_memory=False)
+        print(f"Catalog loaded from stale cache: {len(df)} reference star(s).")
+        return df
+
+    # 4. Nothing available
+    raise RuntimeError(
+        f"Could not load catalog: fetch failed ({fetch_error}) "
+        f"and no cache exists at {resolved_cache}."
+    )
+
+
+def get_science_mag(sci_name, band, catalog=None, engine=None):
+    """Look up the science target magnitude from the catalog DataFrame.
+
+    Returns ``None`` if the magnitude is not found, in which case the caller
+    falls back to brightest-first sorting.
 
     Args:
         sci_name (str): SIMBAD-resolvable name of the science target.
         band (int): Photometric band. 1 selects V-band; any other value
             selects I-band.
-        engine (sqlalchemy.engine.base.Engine, optional): SQLAlchemy engine.
-            Defaults to None, which causes the function to return None
-            immediately.
+        catalog (pandas.DataFrame, optional): The loaded reference star
+            catalog.  When provided, the magnitude is looked up here.
+        engine: Ignored (kept for call-site compatibility).
 
     Returns:
         float or None: The magnitude value, or None if not found.
     """
-    if engine is None:
-        return None
-
     mag_col = 'sy_vmag' if band == 1 else 'sy_imag'
     band_label = 'V' if band == 1 else 'I'
 
-    try:
-        metadata = sql.MetaData()
-        stars_table = sql.Table('Stars', metadata, autoload_with=engine)
-        stmt = sql.select(getattr(stars_table.c, mag_col)).where(
-            sql.or_(
-                stars_table.c.main_id == sci_name,
-                stars_table.c.st_name == sci_name,
-            )
-        ).limit(1)
-
-        with engine.connect() as conn:
-            row = conn.execute(stmt).fetchone()
-
-        if row is not None and row[0] is not None:
-            val = float(row[0])
-            if not np.isnan(val):
+    if catalog is not None:
+        match = catalog[
+            (catalog['main_id'] == sci_name) | (catalog['st_name'] == sci_name)
+        ]
+        if not match.empty:
+            val = safe_float(match.iloc[0].get(mag_col))
+            if val is not None:
                 print(f"  Science target {band_label}-band mag: {val:.2f}")
                 return val
-    except Exception as exc:
-        print(f"  Warning: could not look up science magnitude ({exc}).")
 
     print(
-        f"  Science target {band_label}-band mag not found in DB; "
+        f"  Science target {band_label}-band mag not found in catalog; "
         f"will sort brightest-first."
     )
     return None
@@ -535,8 +612,7 @@ def select_ref_star(
         contrast (str): ``'high'`` or ``'med'``.
         catalog (pandas.DataFrame): Reference star table from
             :func:`load_catalog`.
-        engine (sqlalchemy.engine.base.Engine, optional): SQLAlchemy engine
-            used for science-target magnitude lookup. Defaults to None.
+        engine: Ignored (kept for call-site compatibility).
         time_step (float, optional): Time resolution for angle calculations
             in days. Defaults to 1.0.
         allowed_grades (list of str, optional): Which grade tiers to include
@@ -599,15 +675,35 @@ def select_ref_star(
     print(f"\nUsing grade column: {grade_col}  |  mag column: {mag_col}")
 
     candidates = catalog.copy()
-    if 'grade' in candidates.columns:
-        candidates['grade'] = candidates['grade'].str.strip()
-    elif grade_col in candidates.columns:
-        candidates['grade'] = candidates[grade_col].str.strip()
-    else:
+
+    # Find which column actually holds A/B/C grade data.
+    def _is_usable_grade_col(col_name):
+        if col_name not in candidates.columns:
+            return False
+        sample = candidates[col_name].dropna()
+        return len(sample) > 0 and sample.astype(str).str.match(r'^[ABC]$').any()
+
+    grade_source = None
+    for _try in ('grade', grade_col, 'st_psfgrade'):
+        if _is_usable_grade_col(_try):
+            grade_source = _try
+            break
+    if grade_source is None:
+        # Scan all columns as a last resort
+        for col in candidates.columns:
+            if _is_usable_grade_col(col):
+                grade_source = col
+                break
+    if grade_source is None:
+        print(f"  Catalog columns: {list(candidates.columns)}")
+        print(f"  Sample row:\n{candidates.iloc[0].to_dict() if len(candidates) else 'empty'}")
         raise ValueError(
-            f"Neither 'grade' nor '{grade_col}' found in catalog. "
-            f"Available: {list(catalog.columns)}"
+            f"Could not find a usable grade column (containing A/B/C values). "
+            f"Available columns: {list(catalog.columns)}"
         )
+
+    print(f"  Using grade source column: '{grade_source}'")
+    candidates['grade'] = candidates[grade_source].astype(str).str.strip()
 
     active_grades = list(allowed_grades) if allowed_grades else list(REF_GRADES)
     active_grades = [g for g in active_grades if g in REF_GRADES]
@@ -638,7 +734,7 @@ def select_ref_star(
     print(f"  Found '{sci_name}'.\n")
 
     print(f"Looking up {band_label}-band magnitude for '{sci_name}'...")
-    sci_mag = get_science_mag(sci_name, band, engine=engine)
+    sci_mag = get_science_mag(sci_name, band, catalog=catalog)
 
     if sort_mode == 'closest_mag' and sci_mag is None:
         effective_sort = 'brightest'
@@ -820,26 +916,23 @@ def select_ref_star(
 
 
 if __name__ == "__main__":
-    import corgidb.ingest
-
     print("ReferenceStarPicker\n")
 
     SCIENCE_TARGET = "47 Uma"
     BAND = 1
     CONTRAST = 'high'
-    ANALYSIS_START = "2027-01-01T00:00:00"
+    ANALYSIS_START = "2026-12-01T00:00:00"
     ANALYSIS_DAYS = 365
     ALLOWED_GRADES = ['A', 'B', 'C']
     SORT_MODE = 'closest_mag'
 
-    eng = corgidb.ingest.gen_engine('plandb_user', 'plandb_scratch')
-    catalog = load_catalog(eng)
+    catalog = load_catalog()
     print(f"\nCatalog ready: {len(catalog)} reference stars.\n")
 
     result = select_ref_star(
         SCIENCE_TARGET, ANALYSIS_START, ANALYSIS_DAYS,
         band=BAND, contrast=CONTRAST,
-        catalog=catalog, engine=eng,
+        catalog=catalog,
         allowed_grades=ALLOWED_GRADES,
         sort_mode=SORT_MODE,
     )
