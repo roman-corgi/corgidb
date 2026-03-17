@@ -3,13 +3,11 @@ import pandas
 import numpy as np
 
 url = "https://corgidb.sioslab.com/fetch_refs.php"
-response = requests.get(url, headers={"User-Agent": "XY"})
+response = requests.get(url, headers={"User-Agent": "corgidb_agent"})
 
-if response.status_code == 200:
-    data = response.json()
-else:
-    print("Could not retrieve data")
+assert response.status_code == 200, "Query failed."
 
+data = response.json()
 data = np.vstack(data).transpose()
 
 colnames = [
@@ -25,6 +23,12 @@ colnames = [
     "sy_pmra",
     "sy_pmdec",
     "st_radv",
+    "st_psfgrade_nfb1_high",
+    "st_psfgrade_nfb1_med",
+    "st_psfgrade_specb3_high",
+    "st_psfgrade_specb3_med",
+    "st_psfgrade_wfb4_high",
+    "st_psfgrade_wfb4_med",
 ]
 
 out = {}
