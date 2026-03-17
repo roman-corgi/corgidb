@@ -173,3 +173,6 @@ cython_debug/
 # random cruft 
 .*.swp
 .DS_Store
+
+# frontend config 
+config.php
