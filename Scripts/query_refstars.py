@@ -29,6 +29,10 @@ colnames = [
     "st_psfgrade_specb3_med",
     "st_psfgrade_wfb4_high",
     "st_psfgrade_wfb4_med",
+    "st_uddv",
+    "st_uddi",
+    "st_uddmeas",
+    "st_lddmeas",
 ]
 
 out = {}
