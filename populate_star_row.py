@@ -12,7 +12,7 @@ warnings.filterwarnings('ignore', category=UserWarning)
 
 def populate_star_row(star_id):
     """
-    Query astronomical catalogs and return a populated row for Stars table
+    Query astronomical catalogs and return a populated row for Stars table.
 
     """
     
@@ -41,7 +41,14 @@ def populate_star_row(star_id):
         data.update(vizier_data)
         print(f"  ✓ Vizier catalogs queried")
     
-    # Calculate derived fields from retrieved data
+    # Query NASA Exoplanet Archive for stellar parameters (planet hosts)
+    exoplanet_data = query_exoplanet_archive(star_id)
+    if exoplanet_data is not None:
+        # Use Exoplanet Archive data (authoritative for planet hosts)
+        data.update(exoplanet_data)
+        print(f"  ✓ NASA Exoplanet Archive queried")
+    
+    # Calculate derived fields from retrieved data.
     derived_data = calculate_derived_fields(data)
     data.update(derived_data)
     print(f"  ✓ Derived fields calculated")
@@ -212,29 +219,73 @@ def query_simbad_collections(star_id):
         
         data = {}
         
-        # Stellar parameters from Fe_H measurements table
-        # Note: Teff, log g, and [Fe/H] come bundled from same measurement
-        if 'mesfe_h.teff' in result.colnames and not isinstance(result['mesfe_h.teff'][0], np.ma.core.MaskedConstant):
-            data['st_teff'] = result['mesfe_h.teff'][0]
+        # Convert result to pandas DataFrame.
+        measurements_df = result.to_pandas()
         
-        if 'mesfe_h.log_g' in result.colnames and not isinstance(result['mesfe_h.log_g'][0], np.ma.core.MaskedConstant):
-            data['st_logg'] = result['mesfe_h.log_g'][0]
+        # Stellar parameters from Fe_H measurements table. Newest measurement with complete parameter set.
+        # Filter for rows with complete parameter sets (Teff + log g + [Fe/H]).
+        complete_params = measurements_df[
+            (measurements_df['mesfe_h.teff'].notna()) &
+            (~measurements_df['mesfe_h.teff'].apply(lambda x: isinstance(x, np.ma.core.MaskedConstant))) &
+            (measurements_df['mesfe_h.log_g'].notna()) &
+            (~measurements_df['mesfe_h.log_g'].apply(lambda x: isinstance(x, np.ma.core.MaskedConstant))) &
+            (measurements_df['mesfe_h.fe_h'].notna()) &
+            (~measurements_df['mesfe_h.fe_h'].apply(lambda x: isinstance(x, np.ma.core.MaskedConstant)))
+        ]
         
-        if 'mesfe_h.fe_h' in result.colnames and not isinstance(result['mesfe_h.fe_h'][0], np.ma.core.MaskedConstant):
-            data['st_met'] = result['mesfe_h.fe_h'][0]
+        if len(complete_params) > 0:
+            # Sort by bibcode (newest first - bibcodes are YYYYJJJJJ format). Take the most recent measurement with complete parameter set.
+            best_measurement = complete_params.sort_values(
+                'mesfe_h.bibcode', 
+                ascending=False
+            ).iloc[0]
+            
+            # Extract parameters from single measurement.
+            data['st_teff'] = best_measurement['mesfe_h.teff']
+            data['st_logg'] = best_measurement['mesfe_h.log_g']
+            data['st_met'] = best_measurement['mesfe_h.fe_h']
+            
+            if 'mesfe_h.compstar' in measurements_df.columns:
+                if not isinstance(best_measurement['mesfe_h.compstar'], np.ma.core.MaskedConstant):
+                    data['st_metratio'] = best_measurement['mesfe_h.compstar']
         
-        if 'mesfe_h.compstar' in result.colnames and not isinstance(result['mesfe_h.compstar'][0], np.ma.core.MaskedConstant):
-            data['st_metratio'] = result['mesfe_h.compstar'][0]
+        else:
+            # No complete sets available; fall back to taking newest available values.
+            if 'mesfe_h.teff' in measurements_df.columns:
+                teff_data = measurements_df.dropna(subset=['mesfe_h.teff'])
+                if len(teff_data) > 0:
+                    newest_teff = teff_data.sort_values('mesfe_h.bibcode', ascending=False).iloc[0]
+                    if not isinstance(newest_teff['mesfe_h.teff'], np.ma.core.MaskedConstant):
+                        data['st_teff'] = newest_teff['mesfe_h.teff']
+            
+            if 'mesfe_h.log_g' in measurements_df.columns:
+                logg_data = measurements_df.dropna(subset=['mesfe_h.log_g'])
+                if len(logg_data) > 0:
+                    newest_logg = logg_data.sort_values('mesfe_h.bibcode', ascending=False).iloc[0]
+                    if not isinstance(newest_logg['mesfe_h.log_g'], np.ma.core.MaskedConstant):
+                        data['st_logg'] = newest_logg['mesfe_h.log_g']
+            
+            if 'mesfe_h.fe_h' in measurements_df.columns:
+                feh_data = measurements_df.dropna(subset=['mesfe_h.fe_h'])
+                if len(feh_data) > 0:
+                    newest_feh = feh_data.sort_values('mesfe_h.bibcode', ascending=False).iloc[0]
+                    if not isinstance(newest_feh['mesfe_h.fe_h'], np.ma.core.MaskedConstant):
+                        data['st_met'] = newest_feh['mesfe_h.fe_h']
         
-        # Rotational velocity from rotation measurements table
-        if 'mesrot.vsini' in result.colnames and not isinstance(result['mesrot.vsini'][0], np.ma.core.MaskedConstant):
-            data['st_vsin'] = result['mesrot.vsini'][0]
-            # Include error if available
-            if 'mesrot.vsini_err' in result.colnames:
-                err = result['mesrot.vsini_err'][0]
-                if not isinstance(err, np.ma.core.MaskedConstant):
-                    data['st_vsinerr1'] = err
-                    data['st_vsinerr2'] = -err  # Symmetric error
+        # Rotational velocity from rotation measurements table. Rotation period not available in mesrot table.
+        if 'mesrot.vsini' in measurements_df.columns:
+            vsini_data = measurements_df.dropna(subset=['mesrot.vsini'])
+            if len(vsini_data) > 0:
+                newest_vsini = vsini_data.sort_values('mesrot.bibcode', ascending=False).iloc[0]
+                if not isinstance(newest_vsini['mesrot.vsini'], np.ma.core.MaskedConstant):
+                    data['st_vsin'] = newest_vsini['mesrot.vsini']
+                    
+                    # Include error if available
+                    if 'mesrot.vsini_err' in measurements_df.columns:
+                        err = newest_vsini['mesrot.vsini_err']
+                        if not isinstance(err, np.ma.core.MaskedConstant):
+                            data['st_vsinerr1'] = err
+                            data['st_vsinerr2'] = -err  # Symmetric error
         
         return data
         
@@ -318,6 +369,80 @@ def query_vizier_all(star_id):
     return data if data else None
 
 
+def query_exoplanet_archive(star_id):
+    """
+    Query NASA Exoplanet Archive for stellar mass and radius.    
+    Attempts to retrieve stellar parameters for planet-hosting stars.
+    """
+    
+    try:
+        from astroquery.ipac.nexsci.nasa_exoplanet_archive import NasaExoplanetArchive
+        
+        # Query the Planetary Systems Composite Parameters table.
+        result = NasaExoplanetArchive.query_object(star_id, table='pscomppars')
+        
+        if result is not None and len(result) > 0:
+            data = {}
+            
+            # Stellar mass
+            if 'st_mass' in result.colnames:
+                mass_val = result['st_mass'][0]
+                # Extract value from Quantity object if needed
+                if hasattr(mass_val, 'value'):
+                    mass_val = mass_val.value
+                
+                if not np.isnan(mass_val):
+                    data['st_mass'] = float(mass_val)
+                    
+                    # Include errors if available
+                    if 'st_masserr1' in result.colnames:
+                        err1 = result['st_masserr1'][0]
+                        if hasattr(err1, 'value'):
+                            err1 = err1.value
+                        if not np.isnan(err1):
+                            data['st_masserr1'] = float(err1)
+                    
+                    if 'st_masserr2' in result.colnames:
+                        err2 = result['st_masserr2'][0]
+                        if hasattr(err2, 'value'):
+                            err2 = err2.value
+                        if not np.isnan(err2):
+                            data['st_masserr2'] = float(err2)
+            
+            # Stellar radius
+            if 'st_rad' in result.colnames:
+                rad_val = result['st_rad'][0]
+                # Extract value from Quantity object if needed
+                if hasattr(rad_val, 'value'):
+                    rad_val = rad_val.value
+                
+                if not np.isnan(rad_val):
+                    data['st_rad'] = float(rad_val)
+                    
+                    # Include errors if available
+                    if 'st_raderr1' in result.colnames:
+                        err1 = result['st_raderr1'][0]
+                        if hasattr(err1, 'value'):
+                            err1 = err1.value
+                        if not np.isnan(err1):
+                            data['st_raderr1'] = float(err1)
+                    
+                    if 'st_raderr2' in result.colnames:
+                        err2 = result['st_raderr2'][0]
+                        if hasattr(err2, 'value'):
+                            err2 = err2.value
+                        if not np.isnan(err2):
+                            data['st_raderr2'] = float(err2)
+            
+            return data if data else None
+        
+        return None
+        
+    except Exception as e:
+        # Star may not be in archive or module not available.
+        return None
+    
+    
 def calculate_derived_fields(data):
     """
     Calculate derived astronomical quantities
