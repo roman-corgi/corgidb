@@ -13,4 +13,3 @@ names_list = names_df['st_name'].to_list()
 alias_df, missing_df = alias_check.alias_check(names_list)
 alias_df.to_csv('star_alias.csv')
 missing_df.to_csv('missing_simbad_data.csv')
-#TODO: rerun on plandb scratch and append code to include a list that cannot be resolved via simbad
