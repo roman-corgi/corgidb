@@ -1,0 +1,4 @@
+DB_COLUMN,DESCRIPTION,INDEX,FOREIGNKEY
+alias,Star alias or alternative identifier,TRUE,
+st_name,Canonical star name, ,Stars.st_name
+

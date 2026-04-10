@@ -15,7 +15,12 @@ if ($conn->connect_error) {
 }
 
 $st_name = $_GET['st_name'];
-$sql = "SELECT 
+
+$alias_result = $conn->query("SELECT `st_name` from StarAliases where `alias` = '$st_name'");
+$alias_row = $alias_result->fetch_row();
+$st_name = $alias_row[0];
+
+$sql = "SELECT
     `st_name`, 
     `main_id`, 
     `ra`, 
