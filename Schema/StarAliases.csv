@@ -1,4 +1,3 @@
-DB_COLUMN,DESCRIPTION,INDEX,FOREIGNKEY
-alias,Star alias or alternative identifier,TRUE,
-st_name,Canonical star name, ,Stars.st_name
-
+DB_COLUMN,DESCRIPTION,SQL_DATATYPE,INDEX,FOREIGNKEY
+alias,Star alias or alternative identifier,VARCHAR(40),TRUE,
+main_id,Canonical star name,VARCHAR(40), ,
