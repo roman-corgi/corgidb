@@ -15,7 +15,12 @@ if ($conn->connect_error) {
 }
 
 $st_name = $_GET['st_name'];
-$sql = "SELECT 
+
+$alias_result = $conn->query("SELECT `main_id` from StarAliases where `alias` = '$st_name'");
+$alias_row = $alias_result->fetch_row();
+$main_id = $alias_row[0];
+
+$sql = "SELECT
     `st_name`, 
     `main_id`, 
     `ra`, 
@@ -28,7 +33,7 @@ $sql = "SELECT
     `sy_pmra`, 
     `sy_pmdec`, 
     `st_radv`
-    from Stars where st_name = '$st_name'";
+    from Stars where main_id = '$main_id'";
 
 $result = $conn->query($sql);
 $data = $result->fetch_all();

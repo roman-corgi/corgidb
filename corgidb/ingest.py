@@ -1,11 +1,12 @@
-import pandas
-import keyring
 import getpass
-from sqlalchemy import create_engine, text, types
 import os
-import numpy as np
 import re
 import warnings
+
+import keyring
+import numpy as np
+import pandas
+from sqlalchemy import create_engine, text, types
 
 
 def gen_engine(username, db="plandb", server="127.0.0.1"):
