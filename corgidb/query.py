@@ -35,7 +35,20 @@ class CorgiQuery:
 
         Returns:
             pandas.DataFrame:
-                Query results. Empty DataFrame if no match found.
+                Query results with columns:
+                    st_name,
+                    main_id,
+                    ra,
+                    dec,
+                    spectype,
+                    sy_vmag,
+                    sy_imag,
+                    sy_dist,
+                    sy_plx,
+                    sy_pmra,
+                    sy_pmdec,
+                    st_radv.
+                Empty DataFrame if no match found.
 
         """
 
@@ -44,15 +57,32 @@ class CorgiQuery:
     def query_refstars(self) -> pandas.DataFrame:
         """Query all reference stars.
 
-        Returns:
-            pandas.DataFrame:
-                All reference stars with columns: st_name, main_id, ra, dec,
-                spectype, sy_vmag, sy_imag, sy_dist, sy_plx, sy_pmra,
-                sy_pmdec, st_radv, st_psfgrade_nfb1_high,
-                st_psfgrade_nfb1_med, st_psfgrade_specb3_high,
-                st_psfgrade_specb3_med, st_psfgrade_wfb4_high,
-                st_psfgrade_wfb4_med, st_uddv, st_uddi, st_uddmeas,
-                st_lddmeas. Empty DataFrame if no results.
+    Returns:
+        pandas.DataFrame:
+            All reference stars with columns:
+                st_name,
+                main_id,
+                ra,
+                dec,
+                spectype,
+                sy_vmag,
+                sy_imag,
+                sy_dist,
+                sy_plx,
+                sy_pmra,
+                sy_pmdec,
+                st_radv,
+                st_psfgrade_nfb1_high,
+                st_psfgrade_nfb1_med,
+                st_psfgrade_specb3_high,
+                st_psfgrade_specb3_med,
+                st_psfgrade_wfb4_high,
+                st_psfgrade_wfb4_med,
+                st_uddv,
+                st_uddi,
+                st_uddmeas,
+                st_lddmeas.
+            Empty DataFrame if no results.
 
         """
 
