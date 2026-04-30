@@ -2,9 +2,9 @@ import pandas as pd
 import time
 from corgidb import alias_check
 
-testList = ['HIP 65']
+testList = ['47 UMa']
 start_time = time.perf_counter()
-all_data = alias_check.alias_check(testList)
+all_data = alias_check.alias_check(testList, debug=True)
 stop_time = time.perf_counter()
 print(all_data)
 elapsed_time = stop_time - start_time
