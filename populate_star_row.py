@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 from astroquery.simbad import Simbad
 from astroquery.vizier import Vizier
-from astropy.coordinates import SkyCoord
+from astropy.coordinates import SkyCoord, Distance, BarycentricMeanEcliptic
 import astropy.units as u
 import warnings
 
@@ -453,15 +453,29 @@ def calculate_derived_fields(data):
     
     # Transform coordinates to Galactic and ecliptic systems
     if not np.isnan(data.get('ra', np.nan)) and not np.isnan(data.get('dec', np.nan)):
-        coord = SkyCoord(ra=data['ra']*u.deg, dec=data['dec']*u.deg, frame='icrs')
+        
+        # Build SkyCoord with distance for accurate barycentric transformation
+        # (Distance is required to shift origin from geocentric to barycentric)
+        coord_kwargs = {
+            'ra': data['ra'] * u.deg,
+            'dec': data['dec'] * u.deg,
+            'frame': 'icrs'
+        }
+        
+        # Add distance from parallax if available (required for barycentric transformation)
+        plx = data.get('sy_plx', np.nan)
+        if not np.isnan(plx) and plx > 0:
+            coord_kwargs['distance'] = Distance(parallax=plx * u.mas)
+        
+        coord = SkyCoord(**coord_kwargs)
         
         # Galactic coordinates
         galactic = coord.galactic
         derived['glon'] = galactic.l.deg
         derived['glat'] = galactic.b.deg
         
-        # Ecliptic coordinates
-        ecliptic = coord.transform_to('geocentrictrueecliptic')
+        # Ecliptic coordinates (barycentric mean - matches Roman pointing convention)
+        ecliptic = coord.transform_to(BarycentricMeanEcliptic)
         derived['elon'] = ecliptic.lon.deg
         derived['elat'] = ecliptic.lat.deg
     
