@@ -1,11 +1,12 @@
-import pandas
-import keyring
 import getpass
-from sqlalchemy import create_engine, text, types
 import os
-import numpy as np
 import re
 import warnings
+
+import keyring
+import numpy as np
+import pandas
+from sqlalchemy import create_engine, text, types
 
 
 def gen_engine(username, db="plandb", server="127.0.0.1"):
@@ -90,12 +91,13 @@ def proc_col_req(fname, engine, comment="#"):
         "INDEX",
         "FOREIGNKEY",
     ]
+
+    # cols required to be completely filled
     reqcols = [
         "MY_COLNAME",
         "DB_COLNAME",
         "TABLE",
         "NEW_KEY",
-        "SQL_DATATYPE",
         "INDEX",
     ]
 
@@ -105,11 +107,16 @@ def proc_col_req(fname, engine, comment="#"):
 
     # fill in missing DB cols for boolean keys
     for boolkey in ["NEW_KEY", "INDEX"]:
-        data.loc[data[boolkey].isna(), boolkey] = False
+        with pandas.option_context("future.no_silent_downcasting", True):
+            data[boolkey] = data[boolkey].fillna(False).infer_objects(copy=False)
 
     # new keys without db_colname entries should use my_colname
     inds = (data["NEW_KEY"]) & (data["DB_COLNAME"].isna())
     data.loc[inds, "DB_COLNAME"] = data.loc[inds, "MY_COLNAME"]
+
+    # sanitize column names
+    # remove periods form db colnames
+    data["DB_COLNAME"] = data["DB_COLNAME"].str.replace(".", "p")
 
     # change any STRING datatypes to VARCHAR
     data.loc[data["SQL_DATATYPE"] == "STRING", "SQL_DATATYPE"] = "TEXT"
@@ -143,6 +150,9 @@ def proc_col_req(fname, engine, comment="#"):
         )
 
         for jj, row in newkeys.iterrows():
+            if pandas.isna(row.SQL_DATATYPE):
+                print(f"No datatype available for {row.DB_COLNAME}")
+                continue
             comm = (
                 f"""ALTER TABLE {t} ADD COLUMN {row.DB_COLNAME} {row.SQL_DATATYPE} """
                 f"""COMMENT "{row.DESCRIPTION}";"""  # noqa
@@ -196,7 +206,7 @@ def proc_col_req(fname, engine, comment="#"):
 
 
 def gen_Scenarios_table(data, schema, engine):
-    """Populate SaturationCurves table
+    """Populates the Scenarios table.
 
     Args:
         data (pandas.DataFrame):
@@ -281,7 +291,7 @@ def add_indexes(connection, tablename, indexes):
 
 
 def add_foreignkeys(connection, tablename, cols, foreignkeys):
-    """Add foreign keys to table
+    """Adds foreign key constraints to an existing table.
 
     Args:
         connection (sqlalchemy.engine.base.Connection):
@@ -389,3 +399,67 @@ def updateSQLschema(connection, tablename, schema):
             f'"{schema.loc[schema["Column"] == key, "Comments"].values[0]}";'  # noqa
         )
         _ = connection.execute(text(comm))
+
+
+def get_optimal_sql_datatypes(df: pandas.DataFrame) -> dict:
+    """Generates optimal SQL datatypes for columns in a pandas DataFrame.
+
+    Args:
+        df (pandas.DataFrame): The input DataFrame.
+
+    Returns:
+        dict:
+            A dictionary mapping column names to optimal SQL datatypes.
+    """
+    col_types = {}
+    for col in df.columns:
+        dtype = df[col].dtype
+        if np.issubdtype(dtype, np.integer):
+            min_val, max_val = df[col].min(), df[col].max()
+            if -128 <= min_val and max_val <= 127:
+                col_types[col] = "TINYINT"
+            elif -32768 <= min_val and max_val <= 32767:
+                col_types[col] = "SMALLINT"
+            elif -2147483648 <= min_val and max_val <= 2147483647:
+                col_types[col] = "INT"
+            else:
+                col_types[col] = "BIGINT"
+        elif np.issubdtype(dtype, np.floating):
+            col_types[col] = "DOUBLE"
+        elif dtype == np.bool_:
+            col_types[col] = "BOOLEAN"
+        else:
+            max_len = df[col].str.len().max()
+            if pandas.isna(max_len):
+                col_types[col] = "VARCHAR(255)"
+            else:
+                col_types[col] = f"VARCHAR({int(max_len)})"
+    return col_types
+
+
+def get_sqlalchemy_types(col_types: dict) -> dict:
+    """Given a dictionary of SQL data types, return the equivalent sqlalchemy types
+
+    Args:
+        col_types (dict):
+            The output of `get_optimal_sql_datatypes`
+
+    Returns:
+        dict:
+            Equivalent dictionary but with values all from sqlachemy.typs
+
+    """
+
+    p = re.compile(r"^([A-Za-z]+)(?:\((\d+)\))?$")
+    for key in col_types:
+        if col_types[key] == 'TINYINT':
+            col_types[key] = types.SmallInteger
+            continue
+
+        tmp = p.match(col_types[key])
+        val = getattr(types, tmp.group(1))
+        if tmp.group(2) is not None:
+            val = val(int(tmp.group(2)))
+        col_types[key] = val
+
+    return col_types

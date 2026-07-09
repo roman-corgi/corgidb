@@ -1,6 +1,42 @@
 # corgidb
 Roman Coronagraph Instrument Target Database
 
+Python Library
+==============================
+
+The `corgidb` package provides a Python client for querying the corgidb HTTP API.
+
+### Installation
+
+```bash
+pip install -e .
+```
+
+### Quick start
+
+```python
+from corgidb import CorgiQuery
+
+cq = CorgiQuery()
+
+# Look up a single star
+df = cq.query_star("47 UMa")
+
+# Retrieve all reference stars
+refs = cq.query_refstars()
+```
+
+### Examples
+
+See the [`examples/`](examples/) directory for runnable scripts:
+
+| Script | Description |
+|---|---|
+| [`01_query_single_star.py`](examples/01_query_single_star.py) | Query a star by name |
+| [`02_query_refstars.py`](examples/02_query_refstars.py) | Retrieve and inspect the full reference catalog |
+| [`03_filter_refstars.py`](examples/03_filter_refstars.py) | Filter by magnitude, disk diameter, and PSF grade |
+
+
 Database Input Template
 ==============================
 A database input is composed of two components: 	
