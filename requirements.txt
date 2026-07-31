@@ -6,3 +6,4 @@ keyring
 numpy
 requests
 astropy
+astroquery
