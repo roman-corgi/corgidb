@@ -1,7 +1,10 @@
+from typing import List
+
 import pandas
 
 from corgidb.scripts.query_refstars import query_refstars
 from corgidb.scripts.query_star import query_star
+from corgidb.scripts.query_stars import query_stars
 
 _DEFAULT_BASE_URL = "https://corgidb.sioslab.com"
 
@@ -54,10 +57,38 @@ class CorgiQuery:
 
         return query_star(st_name, url=f"{self.base_url}/fetch_star.php")
 
+    def query_stars(self, st_names: List[str]) -> pandas.DataFrame:
+        """Query multiple stars by name or alias.
+
+        Args:
+            st_names (List[str]):
+                Star names or aliases to look up.
+
+        Returns:
+            pandas.DataFrame:
+                Query results with columns:
+                    st_name,
+                    main_id,
+                    ra,
+                    dec,
+                    spectype,
+                    sy_vmag,
+                    sy_imag,
+                    sy_dist,
+                    sy_plx,
+                    sy_pmra,
+                    sy_pmdec,
+                    st_radv.
+                Empty DataFrame if no matches found.
+
+        """
+
+        return query_stars(st_names, url=f"{self.base_url}/fetch_stars.php")
+
     def query_refstars(self) -> pandas.DataFrame:
         """Query all reference stars.
 
-    Returns:
+        Returns:
         pandas.DataFrame:
             All reference stars with columns:
                 st_name,
