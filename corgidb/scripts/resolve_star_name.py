@@ -21,8 +21,8 @@ def resolve_star_name(
 
     Returns:
         Dict[str, str]:
-            Mapping of input name to resolved main_id. Names with no match
-            in StarAliases are omitted.
+            Mapping of input name (in its original casing) to resolved
+            main_id. Names with no match in StarAliases are omitted.
 
     """
 
@@ -41,4 +41,11 @@ def resolve_star_name(
 
     data = response.json()
 
-    return {alias: main_id for alias, main_id in data}
+    # StarAliases lookups are case-insensitive server-side, so the returned
+    # alias may not match the input's casing exactly. Match case-insensitively
+    # and key the result by the original input string.
+    by_lower = {alias.lower(): main_id for alias, main_id in data}
+
+    return {
+        name: by_lower[name.lower()] for name in st_names if name.lower() in by_lower
+    }
