@@ -23,24 +23,13 @@ import os
 import numpy as np
 import pandas as pd
 import astropy.units as u
-from astropy.coordinates import SkyCoord, Distance, BarycentricMeanEcliptic
+from astropy.coordinates import SkyCoord, Distance, BarycentricMeanEcliptic, Angle
 from sqlalchemy import text
 
 from corgidb.ingest import gen_engine
 
 
-POSITION_COLS = ["ra", "dec"]
-KINEMATIC_COLS = ["sy_plx", "sy_pmra", "sy_pmdec", "st_radv"]
-ALL_SAMPLED_COLS = POSITION_COLS + KINEMATIC_COLS
-
-UNITS = {
-    "ra": u.deg,
-    "dec": u.deg,
-    "sy_plx": u.mas,
-    "sy_pmra": u.mas / u.yr,
-    "sy_pmdec": u.mas / u.yr,
-    "st_radv": u.km / u.s,
-}
+ALL_SAMPLED_COLS = ["ra", "dec", "sy_plx", "sy_pmra", "sy_pmdec", "st_radv"]
 
 ERR_COLS = {
     "ra": ("raerr1", "raerr2"),
@@ -116,6 +105,43 @@ def _safe_float(v):
     return f
 
 
+def ecliptic_from_values(values):
+    """Transform a set of ICRS column values to BarycentricMeanEcliptic.
+
+    Shared by the deterministic central transform and the Monte Carlo
+    sampling so both run through identical frame handling.  ra and dec are
+    required; the kinematic columns (sy_plx, sy_pmra, sy_pmdec, st_radv)
+    are included when present.  Each value may be a scalar or an array.
+
+    Args:
+        values (dict): Column name to value(s) in the column's native unit
+            (ra/dec in deg, sy_plx in mas, proper motions in mas/yr,
+            st_radv in km/s).
+
+    Returns:
+        astropy.coordinates.SkyCoord:
+            The input(s) transformed to BarycentricMeanEcliptic.
+    """
+    kw = dict(frame="icrs", equinox="J2000", obstime="J2000")
+    kw["ra"] = values["ra"] * u.deg
+    kw["dec"] = values["dec"] * u.deg
+
+    if "sy_plx" in values:
+        # Distance(parallax=...) rejects non-positive values; clip
+        # negative draws to a tiny positive parallax so noisy samples
+        # do not discard the rest of the kinematics for the row.
+        plx = np.clip(values["sy_plx"], 1e-6, None)
+        kw["distance"] = Distance(parallax=plx * u.mas)
+    if "sy_pmra" in values:
+        kw["pm_ra_cosdec"] = values["sy_pmra"] * u.mas / u.yr
+    if "sy_pmdec" in values:
+        kw["pm_dec"] = values["sy_pmdec"] * u.mas / u.yr
+    if "st_radv" in values:
+        kw["radial_velocity"] = values["st_radv"] * u.km / u.s
+
+    return SkyCoord(**kw).transform_to(BarycentricMeanEcliptic)
+
+
 def sample_row(row, n, rng):
     """Build a length-n SkyCoord of MC samples for one star row.
 
@@ -147,79 +173,42 @@ def sample_row(row, n, rng):
         s_up = 0.0 if not np.isfinite(s_up) else s_up
         s_lo = 0.0 if not np.isfinite(s_lo) else s_lo
         samples[col] = two_piece_normal(rng, mu, s_up, s_lo, n)
-
-    kw = dict(frame="icrs", equinox="J2000", obstime="J2000")
-    kw["ra"] = samples["ra"] * UNITS["ra"]
-    kw["dec"] = samples["dec"] * UNITS["dec"]
-
-    if "sy_plx" in samples:
-        # Distance(parallax=...) rejects non-positive values; clip
-        # negative draws to a tiny positive parallax so noisy samples
-        # do not discard the rest of the kinematics for the row.
-        plx = np.clip(samples["sy_plx"], 1e-6, None)
-        kw["distance"] = Distance(parallax=plx * UNITS["sy_plx"])
-    if "sy_pmra" in samples:
-        kw["pm_ra_cosdec"] = samples["sy_pmra"] * UNITS["sy_pmra"]
-    if "sy_pmdec" in samples:
-        kw["pm_dec"] = samples["sy_pmdec"] * UNITS["sy_pmdec"]
-    if "st_radv" in samples:
-        kw["radial_velocity"] = samples["st_radv"] * UNITS["st_radv"]
-
-    return SkyCoord(**kw).transform_to(BarycentricMeanEcliptic)
-
-
-def _wrap_lon_for_percentile(lon_deg, central_lon_deg):
-    """Re-center a wrapped longitude array around the central value.
-
-    Longitudes naturally live on [0, 360); a star near the prime meridian
-    will have samples on both sides of the wrap, and a naive percentile
-    over those samples returns nonsense (~180 deg).  Shifting the array
-    so the central value sits at 180 keeps the bulk of the distribution
-    away from either edge before taking percentiles.
-    """
-    shifted = (lon_deg - central_lon_deg + 180.0) % 360.0
-    return shifted, central_lon_deg
-
-
-def _unshift_lon(percentile_value, central_lon_deg):
-    return (percentile_value + central_lon_deg - 180.0) % 360.0
+    return ecliptic_from_values(samples)
 
 
 def compute_row(row, n, rng):
     """Compute (elat, elon, elaterr1, elaterr2, elonerr1, elonerr2) for one row.
 
-    When all four ra/dec error columns are NULL the row falls back to
-    the central transform only and the four error outputs are None.
+    elat/elon are the deterministic transform of the DB ra/dec (plus any
+    available kinematics) and do not depend on the RNG.  The uncertainties
+    come from the Monte Carlo samples; when the ra/dec error columns are
+    NULL the four uncertainty outputs are None.
     """
+    # Deterministic central transform; elat/elon never depend on the RNG.
+    central = ecliptic_from_values(
+        {c: mu for c in ALL_SAMPLED_COLS if np.isfinite(mu := _safe_float(row[c]))}
+    )
+    elat = float(central.lat.to_value(u.deg))
+    elon = float(central.lon.to_value(u.deg))
+
     pos_err_cols = ("raerr1", "raerr2", "decerr1", "decerr2")
-    has_pos_err = all(np.isfinite(_safe_float(row[c])) for c in pos_err_cols)
-
-    # Always evaluate the central transform so elat/elon are populated
-    # even when error columns are missing.
-    central = sample_row(row, 1, rng=np.random.default_rng(0))
-    elat_c = float(central.lat[0].to_value(u.deg))
-    elon_c = float(central.lon[0].to_value(u.deg))
-
-    if not has_pos_err:
-        return elat_c, elon_c, None, None, None, None
+    if not all(np.isfinite(_safe_float(row[c])) for c in pos_err_cols):
+        return elat, elon, None, None, None, None
 
     ec = sample_row(row, n, rng)
-    lat = ec.lat.to_value(u.deg)
-    lon = ec.lon.to_value(u.deg)
 
     # Latitude is bounded on [-90, 90], percentiles are well-defined.
-    p16, p50, p84 = np.percentile(lat, [16, 50, 84])
-    elat = float(p50)
-    elaterr1 = float(p84 - p50)
-    elaterr2 = float(p50 - p16)
+    lat = ec.lat.to_value(u.deg)
+    p16, p84 = np.percentile(lat, [16, 84])
+    elaterr1 = float(p84 - elat)
+    elaterr2 = float(elat - p16)
 
     # Longitude is circular; re-center around the central value before
     # taking percentiles so the wrap at 0/360 deg does not corrupt them.
-    lon_shift, _ = _wrap_lon_for_percentile(lon, elon_c)
-    p16, p50, p84 = np.percentile(lon_shift, [16, 50, 84])
-    elon = float(_unshift_lon(p50, elon_c))
-    elonerr1 = float(p84 - p50)
-    elonerr2 = float(p50 - p16)
+    lon = ec.lon.wrap_at(Angle(elon, u.deg) + 180 * u.deg).deg
+    p16, p84 = np.percentile(lon, [16, 84])
+    elonerr1 = float(p84 - elon)
+    elonerr2 = float(elon - p16)
 
     return elat, elon, elaterr1, elaterr2, elonerr1, elonerr2
 
