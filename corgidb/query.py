@@ -5,6 +5,7 @@ from typing import Iterable, List, Union
 import numpy as np
 import pandas
 from astroquery.simbad import Simbad
+from pyvo.dal.exceptions import DALServiceError
 
 from corgidb.scripts.columns import STAR_COLUMNS
 from corgidb.scripts.query_refstars import query_refstars
@@ -179,7 +180,12 @@ class CorgiQuery:
         """
 
         simbad = Simbad()
-        simbad.add_votable_fields("pmra", "pmdec", "plx_value", "rvz_radvel")
+        try:
+            simbad.add_votable_fields("pmra", "pmdec", "plx_value", "rvz_radvel")
+        except DALServiceError:
+            print("SIMBAD unreachable; falling back to the CfA mirror.")
+            simbad.server = "simbad.harvard.edu"
+            simbad.add_votable_fields("pmra", "pmdec", "plx_value", "rvz_radvel")
 
         try:
             res = simbad.query_object(st_name)

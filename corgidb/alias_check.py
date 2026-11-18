@@ -1,6 +1,7 @@
 from collections import Counter
 import pandas as pd
 from astroquery.simbad import Simbad
+from pyvo.dal.exceptions import DALServiceError
 
 
 def alias_check(name_list: list, debug: bool=False):
@@ -21,12 +22,18 @@ def alias_check(name_list: list, debug: bool=False):
     debug_data = {}
     checked_list = []
     for name in name_list:
-        result = Simbad.query_object(name)
+        simbad = Simbad()
+        try:
+            result = simbad.query_object(name)
+        except DALServiceError:
+            print("SIMBAD unreachable; falling back to the CfA mirror.")
+            simbad.server = "simbad.harvard.edu"
+            result = simbad.query_object(name)
         if result is not None and len(result) > 0 :
             main_id = result['main_id'][0]
             if main_id not in checked_list:
                 checked_list.append(main_id)
-                alias_res = Simbad.query_objectids(main_id)
+                alias_res = simbad.query_objectids(main_id)
                 if alias_res is not None:
                     alias_list = alias_res['id'].tolist()
                     main_list = [main_id] * len(alias_list)

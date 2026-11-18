@@ -6,4 +6,4 @@ keyring
 numpy
 requests
 astropy
-astroquery
+astroquery>=0.4.8

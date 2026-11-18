@@ -7,6 +7,7 @@ from astropy.coordinates import SkyCoord
 from astropy import units as u
 import os
 import argparse
+import requests
 from corgidb.ingest import gen_engine
 
 #run python -m Scripts.stellar_diameter_est
@@ -64,6 +65,16 @@ def _extract_theta(table):
 
     return None
 
+def _vizier_region(coord, radius, cat):
+    v = Vizier()
+    try:
+        return v.query_region(coord, radius=radius, catalog=cat)
+    except requests.RequestException:
+        print("VizieR unreachable; falling back to the CfA mirror.")
+        v.VIZIER_SERVER = "vizier.cfa.harvard.edu"
+        return v.query_region(coord, radius=radius, catalog=cat)
+
+
 #find stellar diameter from JDSC or JMDC
 def _query_vizier_ra_dec(ra_deg, dec_deg, radius_arcsec=60.0):
     if ra_deg is None or dec_deg is None:
@@ -73,7 +84,7 @@ def _query_vizier_ra_dec(ra_deg, dec_deg, radius_arcsec=60.0):
     #JSDC first
     for cat in _JSDC_IDS:
         try:
-            res = Vizier.query_region(coord, radius=radius_arcsec*u.arcsec, catalog=cat)
+            res = _vizier_region(coord, radius_arcsec*u.arcsec, cat)
             if res and len(res) > 0 and len(res[0]) > 0:
                 got = _extract_theta(res[0])
                 if got:
@@ -85,7 +96,7 @@ def _query_vizier_ra_dec(ra_deg, dec_deg, radius_arcsec=60.0):
     #JMDC
     for cat in _JMDC_IDS:
         try:
-            res = Vizier.query_region(coord, radius=radius_arcsec*u.arcsec, catalog=cat)
+            res = _vizier_region(coord, radius_arcsec*u.arcsec, cat)
             if res and len(res) > 0 and len(res[0]) > 0:
                 got = _extract_theta(res[0])
                 if got:

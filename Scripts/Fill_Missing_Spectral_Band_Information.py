@@ -22,6 +22,7 @@ import pandas as pd
 import sqlalchemy as sql
 import EXOSIMS.Prototypes.TargetList
 from astroquery.simbad import Simbad
+from pyvo.dal.exceptions import DALServiceError
 from astropy.coordinates import Distance
 import astropy.units as u
 from synphot import Observation
@@ -115,7 +116,12 @@ def _simbad_query(names: list) -> dict:
         return {}
 
     simbad = Simbad()
-    simbad.add_votable_fields('V', 'I')
+    try:
+        simbad.add_votable_fields('V', 'I')
+    except DALServiceError:
+        print("SIMBAD unreachable; falling back to the CfA mirror.")
+        simbad.server = "simbad.harvard.edu"
+        simbad.add_votable_fields('V', 'I')
 
     def _safe(row, col):
         try:
