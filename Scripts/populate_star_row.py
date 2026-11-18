@@ -2,9 +2,11 @@ import pandas as pd
 import numpy as np
 from astroquery.simbad import Simbad
 from astroquery.vizier import Vizier
+from pyvo.dal.exceptions import DALServiceError
 from astropy.coordinates import SkyCoord, Distance, BarycentricMeanEcliptic
 import astropy.units as u
 import warnings
+import requests
 
 # Suppress astroquery warnings for cleaner output
 warnings.filterwarnings('ignore', category=UserWarning)
@@ -124,7 +126,12 @@ def query_simbad_basic(star_id):
     
     try:
         custom_simbad = Simbad()
-        custom_simbad.add_votable_fields('ids', 'sp_type')
+        try:
+            custom_simbad.add_votable_fields('ids', 'sp_type')
+        except DALServiceError:
+            print("SIMBAD unreachable; falling back to the CfA mirror.")
+            custom_simbad.server = "simbad.harvard.edu"
+            custom_simbad.add_votable_fields('ids', 'sp_type')
         custom_simbad.add_votable_fields('pmra', 'pmdec', 'plx_value', 'rvz_radvel')
         custom_simbad.add_votable_fields('B', 'V', 'J', 'H', 'K', 'I', 'G')
         
@@ -210,7 +217,12 @@ def query_simbad_collections(star_id):
     
     try:
         collections_simbad = Simbad()
-        collections_simbad.add_votable_fields('mesfe_h', 'mesrot')
+        try:
+            collections_simbad.add_votable_fields('mesfe_h', 'mesrot')
+        except DALServiceError:
+            print("SIMBAD unreachable; falling back to the CfA mirror.")
+            collections_simbad.server = "simbad.harvard.edu"
+            collections_simbad.add_votable_fields('mesfe_h', 'mesrot')
         
         result = collections_simbad.query_object(star_id)
         
@@ -294,6 +306,16 @@ def query_simbad_collections(star_id):
         return None
 
 
+def _vizier_query(star_id, catalog):
+    v = Vizier(columns=["**"], row_limit=1)
+    try:
+        return v.query_object(star_id, catalog=catalog)
+    except requests.RequestException:
+        print("VizieR unreachable; falling back to the CfA mirror.")
+        v.VIZIER_SERVER = "vizier.cfa.harvard.edu"
+        return v.query_object(star_id, catalog=catalog)
+
+
 def query_vizier_all(star_id):
     """
     Query Vizier catalogs for additional photometry and stellar parameters
@@ -304,8 +326,7 @@ def query_vizier_all(star_id):
     
     # AllWISE (II/328) - WISE infrared photometry
     try:
-        v = Vizier(columns=["**"], row_limit=1)
-        result = v.query_object(star_id, catalog="II/328")
+        result = _vizier_query(star_id, "II/328")
         
         if result and len(result) > 0:
             for i, band in enumerate(['W1mag', 'W2mag', 'W3mag', 'W4mag'], 1):
@@ -321,8 +342,7 @@ def query_vizier_all(star_id):
     
     # SDSS DR16 (V/154) - Sloan optical photometry
     try:
-        v = Vizier(columns=["**"], row_limit=1)
-        result = v.query_object(star_id, catalog="V/154")
+        result = _vizier_query(star_id, "V/154")
         
         if result and len(result) > 0:
             sloan_map = {'umag': 'sy_umag', 'gmag': 'sy_gmag', 'rmag': 'sy_rmag',
@@ -340,8 +360,7 @@ def query_vizier_all(star_id):
     
     # TIC v8 (IV/38) - TESS magnitudes and stellar parameters
     try:
-        v = Vizier(columns=["**"], row_limit=1)
-        result = v.query_object(star_id, catalog="IV/38/tic")
+        result = _vizier_query(star_id, "IV/38/tic")
         
         if result and len(result) > 0:
             # TESS magnitude

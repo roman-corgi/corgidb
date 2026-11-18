@@ -7,6 +7,7 @@ from astropy.coordinates import SkyCoord
 from astropy import units as u
 import os
 import argparse
+import requests
 from corgidb.ingest import gen_engine
 
 #run python -m Scripts.stellar_diameter_est
@@ -14,9 +15,17 @@ from corgidb.ingest import gen_engine
 Vizier.ROW_LIMIT = 50
 
 def _find_jsdc_jmdc():
-    jsdc = list(Vizier.find_catalogs("JSDC").keys())
-    jmdc = list(Vizier.find_catalogs("JMDC").keys())
-    return jsdc, jmdc
+    # find_catalogs returns None (not an exception) when the server is
+    # unreachable, so try CDS then the CfA mirror and tolerate both failing.
+    for server in (None, "vizier.cfa.harvard.edu"):
+        v = Vizier()
+        if server:
+            v.VIZIER_SERVER = server
+        jsdc = v.find_catalogs("JSDC")
+        jmdc = v.find_catalogs("JMDC")
+        if jsdc and jmdc:
+            return list(jsdc.keys()), list(jmdc.keys())
+    return [], []
 
 _JSDC_IDS, _JMDC_IDS = _find_jsdc_jmdc()
 
@@ -64,6 +73,16 @@ def _extract_theta(table):
 
     return None
 
+def _vizier_region(coord, radius, cat):
+    v = Vizier()
+    try:
+        return v.query_region(coord, radius=radius, catalog=cat)
+    except requests.RequestException:
+        print("VizieR unreachable; falling back to the CfA mirror.")
+        v.VIZIER_SERVER = "vizier.cfa.harvard.edu"
+        return v.query_region(coord, radius=radius, catalog=cat)
+
+
 #find stellar diameter from JDSC or JMDC
 def _query_vizier_ra_dec(ra_deg, dec_deg, radius_arcsec=60.0):
     if ra_deg is None or dec_deg is None:
@@ -73,7 +92,7 @@ def _query_vizier_ra_dec(ra_deg, dec_deg, radius_arcsec=60.0):
     #JSDC first
     for cat in _JSDC_IDS:
         try:
-            res = Vizier.query_region(coord, radius=radius_arcsec*u.arcsec, catalog=cat)
+            res = _vizier_region(coord, radius_arcsec*u.arcsec, cat)
             if res and len(res) > 0 and len(res[0]) > 0:
                 got = _extract_theta(res[0])
                 if got:
@@ -85,7 +104,7 @@ def _query_vizier_ra_dec(ra_deg, dec_deg, radius_arcsec=60.0):
     #JMDC
     for cat in _JMDC_IDS:
         try:
-            res = Vizier.query_region(coord, radius=radius_arcsec*u.arcsec, catalog=cat)
+            res = _vizier_region(coord, radius_arcsec*u.arcsec, cat)
             if res and len(res) > 0 and len(res[0]) > 0:
                 got = _extract_theta(res[0])
                 if got:
