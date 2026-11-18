@@ -15,9 +15,17 @@ from corgidb.ingest import gen_engine
 Vizier.ROW_LIMIT = 50
 
 def _find_jsdc_jmdc():
-    jsdc = list(Vizier.find_catalogs("JSDC").keys())
-    jmdc = list(Vizier.find_catalogs("JMDC").keys())
-    return jsdc, jmdc
+    # find_catalogs returns None (not an exception) when the server is
+    # unreachable, so try CDS then the CfA mirror and tolerate both failing.
+    for server in (None, "vizier.cfa.harvard.edu"):
+        v = Vizier()
+        if server:
+            v.VIZIER_SERVER = server
+        jsdc = v.find_catalogs("JSDC")
+        jmdc = v.find_catalogs("JMDC")
+        if jsdc and jmdc:
+            return list(jsdc.keys()), list(jmdc.keys())
+    return [], []
 
 _JSDC_IDS, _JMDC_IDS = _find_jsdc_jmdc()
 
