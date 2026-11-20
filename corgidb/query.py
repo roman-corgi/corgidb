@@ -1,12 +1,12 @@
 import os
 import urllib.parse
-from typing import Iterable, List, Union
+from typing import Iterable, List, Optional, Union
 
 import numpy as np
 import pandas
-from astroquery.simbad import Simbad
-from pyvo.dal.exceptions import DALServiceError
+from astroquery.simbad import SimbadClass
 
+from corgidb.mirrors import SIMBAD_ERRORS, get_simbad
 from corgidb.scripts.columns import STAR_COLUMNS
 from corgidb.scripts.query_refstars import query_refstars
 from corgidb.scripts.query_star import query_star
@@ -15,6 +15,7 @@ from corgidb.scripts.resolve_star_name import resolve_star_name
 from corgidb.utils import get_cache_dir
 
 _DEFAULT_BASE_URL = "https://corgidb.sioslab.com"
+_SIMBAD_FIELDS = ("pmra", "pmdec", "plx_value", "rvz_radvel")
 
 
 def _atomic_write_csv(df: pandas.DataFrame, path: str) -> None:
@@ -160,7 +161,9 @@ class CorgiQuery:
         )
         _atomic_write_csv(self.starcache, self._starcache_path)
 
-    def query_simbad(self, st_name: str) -> pandas.DataFrame:
+    def query_simbad(
+        self, st_name: str, simbad: Optional[SimbadClass] = None
+    ) -> pandas.DataFrame:
         """Query SIMBAD directly for a star not found in corgidb.
 
         Used by :meth:`cache_stars` as a fallback for names that don't
@@ -171,36 +174,50 @@ class CorgiQuery:
         Args:
             st_name (str):
                 Star name to look up in SIMBAD.
+            simbad (Optional[astroquery.simbad.SimbadClass]):
+                Simbad instance to query, as returned by
+                :func:`corgidb.mirrors.get_simbad` with the proper motion,
+                parallax and radial velocity fields. If None (default), a
+                reachable mirror is selected for this call.
 
         Returns:
             pandas.DataFrame:
                 Single-row result with the same columns as query_stars.
                 Empty DataFrame if SIMBAD has no match or the query fails.
+                If no SIMBAD mirror is reachable, a single row with
+                ``st_name`` set and every other column (including
+                ``main_id``) NaN.
 
         """
 
-        simbad = Simbad()
-        try:
-            simbad.add_votable_fields("pmra", "pmdec", "plx_value", "rvz_radvel")
-        except DALServiceError:
-            print("SIMBAD unreachable; falling back to the CfA mirror.")
-            simbad.server = "simbad.harvard.edu"
-            simbad.add_votable_fields("pmra", "pmdec", "plx_value", "rvz_radvel")
+        unavailable = pandas.DataFrame(
+            [{"st_name": st_name}], columns=STAR_COLUMNS, dtype=object
+        )
+
+        if simbad is None:
+            simbad = get_simbad(*_SIMBAD_FIELDS)
+            if simbad is None:
+                return unavailable
 
         try:
             res = simbad.query_object(st_name)
+        except SIMBAD_ERRORS:
+            print(f"SIMBAD mirror {simbad.server} failed while querying {st_name}.")
+            return unavailable
         except Exception:
             res = None
 
         if res is None or len(res) == 0:
             return pandas.DataFrame(columns=STAR_COLUMNS)
 
-        for col in ["pmra", "pmdec", "rvz_radvel"]:
-            res[col] = res[col].filled(0)
-
+        # Mirrors differ in how they report missing values: CDS returns masked
+        # columns, the CfA mirror plain columns holding NaN. Handle both.
         row = res[0]
-        plx = row["plx_value"]
-        plx = None if np.ma.is_masked(plx) else float(plx)
+        missing = {
+            col: np.ma.is_masked(row[col]) or np.isnan(row[col])
+            for col in ["pmra", "pmdec", "rvz_radvel", "plx_value"]
+        }
+        plx = None if missing["plx_value"] else float(row["plx_value"])
 
         return pandas.DataFrame(
             [
@@ -214,9 +231,11 @@ class CorgiQuery:
                     "sy_imag": None,
                     "sy_dist": None,
                     "sy_plx": plx,
-                    "sy_pmra": float(row["pmra"]),
-                    "sy_pmdec": float(row["pmdec"]),
-                    "st_radv": float(row["rvz_radvel"]),
+                    "sy_pmra": 0.0 if missing["pmra"] else float(row["pmra"]),
+                    "sy_pmdec": 0.0 if missing["pmdec"] else float(row["pmdec"]),
+                    "st_radv": 0.0
+                    if missing["rvz_radvel"]
+                    else float(row["rvz_radvel"]),
                 }
             ],
             columns=STAR_COLUMNS,
@@ -235,7 +254,9 @@ class CorgiQuery:
         SIMBAD lookup (see :meth:`query_simbad`), which leaves spectype,
         sy_vmag, sy_imag, and sy_dist null. Names not found in either source
         are silently omitted, and duplicate aliases for the same star
-        collapse to a single row.
+        collapse to a single row. If no SIMBAD mirror is reachable, each
+        name that needed SIMBAD gets a row with ``st_name`` set and every
+        other column NaN; these rows are never written to the cache.
 
         Args:
             st_names (Union[str, Iterable[str]]):
@@ -293,20 +314,36 @@ class CorgiQuery:
         # SIMBAD fallback for names corgidb has never heard of.
         cached_ids = set(self.starcache["main_id"])
         simbad_ids_for_name: dict[str, str] = {}
+        # all-NaN rows for names SIMBAD could not be asked about; never cached
+        unavailable_rows: dict[str, pandas.DataFrame] = {}
         newly_fetched_ids: set = set()
         new_simbad_rows = []
+        simbad = None
+        simbad_checked = False
         for name in st_names:
-            if name in resolved:
+            if name in resolved or name in unavailable_rows:
                 continue
             if not force_new and name in cached_ids:
                 # already cached from an earlier SIMBAD lookup under this
                 # exact name
                 simbad_ids_for_name[name] = name
                 continue
-            simbad_row = self.query_simbad(name)
+            if not simbad_checked:
+                # pick a mirror once per call, and only if SIMBAD is needed
+                simbad = get_simbad(*_SIMBAD_FIELDS)
+                simbad_checked = True
+            if simbad is None:
+                unavailable_rows[name] = pandas.DataFrame(
+                    [{"st_name": name}], columns=STAR_COLUMNS, dtype=object
+                )
+                continue
+            simbad_row = self.query_simbad(name, simbad=simbad)
             if simbad_row.empty:
                 continue
             mid = simbad_row.iloc[0]["main_id"]
+            if pandas.isna(mid):
+                unavailable_rows[name] = simbad_row
+                continue
             simbad_ids_for_name[name] = mid
             # a different name earlier in this same batch may have already
             # resolved to the same SIMBAD main_id; only queue one row for it
@@ -317,27 +354,30 @@ class CorgiQuery:
         if new_simbad_rows:
             self._merge_into_cache(pandas.concat(new_simbad_rows, ignore_index=True))
 
-        ordered_ids: List[str] = []
+        starcache_unique = self.starcache.drop_duplicates(
+            subset="main_id", keep="last"
+        ).set_index("main_id", drop=False)
+        seen_ids: set = set()
+        pieces: List[pandas.DataFrame] = []
         for name in st_names:
+            if name in unavailable_rows:
+                pieces.append(unavailable_rows.pop(name))
+                continue
             if name in resolved:
                 mid = resolved[name]
             elif name in simbad_ids_for_name:
                 mid = simbad_ids_for_name[name]
             else:
                 continue
-            if mid not in ordered_ids:
-                ordered_ids.append(mid)
+            if mid in seen_ids or mid not in starcache_unique.index:
+                continue
+            seen_ids.add(mid)
+            pieces.append(starcache_unique.loc[[mid]])
 
-        if not ordered_ids:
+        if not pieces:
             return pandas.DataFrame(columns=STAR_COLUMNS)
 
-        present_ids = [i for i in ordered_ids if i in set(self.starcache["main_id"])]
-        starcache_unique = self.starcache.drop_duplicates(subset="main_id", keep="last")
-        return (
-            starcache_unique.set_index("main_id", drop=False)
-            .reindex(present_ids)
-            .reset_index(drop=True)
-        )
+        return pandas.concat(pieces, ignore_index=True)[STAR_COLUMNS]
 
     def query_refstars(self) -> pandas.DataFrame:
         """Query all reference stars.

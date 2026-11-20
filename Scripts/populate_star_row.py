@@ -1,12 +1,12 @@
 import pandas as pd
 import numpy as np
-from astroquery.simbad import Simbad
 from astroquery.vizier import Vizier
-from pyvo.dal.exceptions import DALServiceError
 from astropy.coordinates import SkyCoord, Distance, BarycentricMeanEcliptic
 import astropy.units as u
 import warnings
 import requests
+
+from corgidb.mirrors import VIZIER_SERVERS, get_simbad
 
 # Suppress astroquery warnings for cleaner output
 warnings.filterwarnings('ignore', category=UserWarning)
@@ -125,15 +125,12 @@ def query_simbad_basic(star_id):
     """
     
     try:
-        custom_simbad = Simbad()
-        try:
-            custom_simbad.add_votable_fields('ids', 'sp_type')
-        except DALServiceError:
-            print("SIMBAD unreachable; falling back to the CfA mirror.")
-            custom_simbad.server = "simbad.harvard.edu"
-            custom_simbad.add_votable_fields('ids', 'sp_type')
-        custom_simbad.add_votable_fields('pmra', 'pmdec', 'plx_value', 'rvz_radvel')
-        custom_simbad.add_votable_fields('B', 'V', 'J', 'H', 'K', 'I', 'G')
+        custom_simbad = get_simbad(
+            'ids', 'sp_type', 'pmra', 'pmdec', 'plx_value', 'rvz_radvel',
+            'B', 'V', 'J', 'H', 'K', 'I', 'G'
+        )
+        if custom_simbad is None:
+            return None
         
         result = custom_simbad.query_object(star_id)
         
@@ -216,13 +213,9 @@ def query_simbad_collections(star_id):
     """
     
     try:
-        collections_simbad = Simbad()
-        try:
-            collections_simbad.add_votable_fields('mesfe_h', 'mesrot')
-        except DALServiceError:
-            print("SIMBAD unreachable; falling back to the CfA mirror.")
-            collections_simbad.server = "simbad.harvard.edu"
-            collections_simbad.add_votable_fields('mesfe_h', 'mesrot')
+        collections_simbad = get_simbad('mesfe_h', 'mesrot')
+        if collections_simbad is None:
+            return None
         
         result = collections_simbad.query_object(star_id)
         
@@ -307,13 +300,27 @@ def query_simbad_collections(star_id):
 
 
 def _vizier_query(star_id, catalog):
+    """Query one VizieR catalog by object name, trying each mirror in turn.
+
+    Args:
+        star_id (str):
+            Object name to look up.
+        catalog (str):
+            VizieR catalog identifier.
+
+    Returns:
+        astroquery.utils.TableList or None:
+            Query result, or None if no VizieR mirror is reachable.
+    """
     v = Vizier(columns=["**"], row_limit=1)
-    try:
-        return v.query_object(star_id, catalog=catalog)
-    except requests.RequestException:
-        print("VizieR unreachable; falling back to the CfA mirror.")
-        v.VIZIER_SERVER = "vizier.cfa.harvard.edu"
-        return v.query_object(star_id, catalog=catalog)
+    for server in VIZIER_SERVERS:
+        v.VIZIER_SERVER = server
+        try:
+            return v.query_object(star_id, catalog=catalog)
+        except requests.RequestException:
+            print(f"VizieR mirror {server} unreachable; trying next.")
+    print("No VizieR mirror is available.")
+    return None
 
 
 def query_vizier_all(star_id):

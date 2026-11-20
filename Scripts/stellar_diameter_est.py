@@ -9,6 +9,7 @@ import os
 import argparse
 import requests
 from corgidb.ingest import gen_engine
+from corgidb.mirrors import VIZIER_SERVERS
 
 #run python -m Scripts.stellar_diameter_est
 
@@ -16,15 +17,16 @@ Vizier.ROW_LIMIT = 50
 
 def _find_jsdc_jmdc():
     # find_catalogs returns None (not an exception) when the server is
-    # unreachable, so try CDS then the CfA mirror and tolerate both failing.
-    for server in (None, "vizier.cfa.harvard.edu"):
+    # unreachable, so try each mirror in turn and tolerate all of them failing.
+    for server in VIZIER_SERVERS:
         v = Vizier()
-        if server:
-            v.VIZIER_SERVER = server
+        v.VIZIER_SERVER = server
         jsdc = v.find_catalogs("JSDC")
         jmdc = v.find_catalogs("JMDC")
         if jsdc and jmdc:
             return list(jsdc.keys()), list(jmdc.keys())
+        print(f"VizieR mirror {server} unreachable; trying next.")
+    print("No VizieR mirror is available.")
     return [], []
 
 _JSDC_IDS, _JMDC_IDS = _find_jsdc_jmdc()
@@ -74,13 +76,29 @@ def _extract_theta(table):
     return None
 
 def _vizier_region(coord, radius, cat):
+    """Query one VizieR catalog around a position, trying each mirror in turn.
+
+    Args:
+        coord (astropy.coordinates.SkyCoord):
+            Search center.
+        radius (astropy.units.Quantity):
+            Search radius.
+        cat (str):
+            VizieR catalog identifier.
+
+    Returns:
+        astroquery.utils.TableList or None:
+            Query result, or None if no VizieR mirror is reachable.
+    """
     v = Vizier()
-    try:
-        return v.query_region(coord, radius=radius, catalog=cat)
-    except requests.RequestException:
-        print("VizieR unreachable; falling back to the CfA mirror.")
-        v.VIZIER_SERVER = "vizier.cfa.harvard.edu"
-        return v.query_region(coord, radius=radius, catalog=cat)
+    for server in VIZIER_SERVERS:
+        v.VIZIER_SERVER = server
+        try:
+            return v.query_region(coord, radius=radius, catalog=cat)
+        except requests.RequestException:
+            print(f"VizieR mirror {server} unreachable; trying next.")
+    print("No VizieR mirror is available.")
+    return None
 
 
 #find stellar diameter from JDSC or JMDC
