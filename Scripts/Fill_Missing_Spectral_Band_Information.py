@@ -21,12 +21,12 @@ from datetime import datetime
 import pandas as pd
 import sqlalchemy as sql
 import EXOSIMS.Prototypes.TargetList
-from astroquery.simbad import Simbad
-from pyvo.dal.exceptions import DALServiceError
 from astropy.coordinates import Distance
 import astropy.units as u
 from synphot import Observation
 from synphot.units import VEGAMAG
+
+from corgidb.mirrors import get_simbad
 
 GRADE_COLUMNS = {
     (1, 'high'): 'st_psfgrade_nfb1_high',
@@ -115,13 +115,9 @@ def _simbad_query(names: list) -> dict:
     if not names:
         return {}
 
-    simbad = Simbad()
-    try:
-        simbad.add_votable_fields('V', 'I')
-    except DALServiceError:
-        print("SIMBAD unreachable; falling back to the CfA mirror.")
-        simbad.server = "simbad.harvard.edu"
-        simbad.add_votable_fields('V', 'I')
+    simbad = get_simbad('V', 'I')
+    if simbad is None:
+        return {}
 
     def _safe(row, col):
         try:
